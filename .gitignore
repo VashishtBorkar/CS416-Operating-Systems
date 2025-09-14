@@ -1,0 +1,33 @@
+# Compiled object files
+*.o
+
+# Compiled binary executables
+a.out
+*.out
+*.exe
+
+# Libraries
+*.so
+*.dylib
+*.dll
+
+# Debug files
+*.dSYM/
+*.stackdump
+
+# Editor/IDE files
+*~
+*.swp
+*.swo
+.vscode/
+.idea/
+
+# Logs
+*.log
+
+# OS generated files
+.DS_Store
+Thumbs.db
+
+# Backup files
+*.bak
