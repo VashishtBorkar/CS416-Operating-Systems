@@ -19,8 +19,11 @@ static unsigned int myaddress = 4026544704;   // Binary  would be 11110000000000
 static unsigned int get_top_bits(unsigned int value,  int num_bits)
 {
 	//Implement your code here
-    
-	
+    int total_bits = sizeof(value) * 8;
+
+    printf("Number of bits: %d\n", sizeof(value)*8);
+    printf("Number of bits shifted: %d\n", (total_bits - num_bits));
+    return value >> (total_bits - num_bits);
 }
 
 
@@ -31,6 +34,13 @@ static unsigned int get_top_bits(unsigned int value,  int num_bits)
 static void set_bit_at_index(char *bitmap, int index)
 {
     //Implement your code here	
+    int byte_idx = index/4;
+    int bit_idx = index%4;
+    int mask = 1 << bit_idx;
+    bitmap[byte_idx] = bitmap[byte_idx] | mask;
+    printf("Index: %d\n", index);
+    printf("Byte Index: %d\n", byte_idx);
+    printf("Bit Index: %d\n", bit_idx);
 
     return;
 }
@@ -44,6 +54,15 @@ static int get_bit_at_index(char *bitmap, int index)
 {
     //Get to the location in the character bitmap array
     //Implement your code here
+    int byte_idx = index / 8;
+    int bit_idx = index % 8;
+    int mask = 1 << bit_idx;
+    int result = (bitmap[byte_idx] & mask) >> bit_idx;
+    
+    printf("Index: %d\n", index);
+    printf("Byte Index: %d\n", byte_idx);
+    printf("Bit Index: %d\n", bit_idx);
+    return result;
     
 }
 

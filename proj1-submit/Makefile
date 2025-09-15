@@ -2,7 +2,7 @@ CC = gcc
 CFLAGS = -Wall -Wextra -O2
 
 # Targets
-all: thread bitops ucontext
+all: threads bitops ucontext
 
 threads: threads.c
 	$(CC) $(CFLAGS) -lpthread -o threads threads.c
@@ -14,4 +14,4 @@ ucontext: ucontext.c
 	$(CC) $(CFLAGS) -o ucontext ucontext.c
 
 clean:
-	rm -f thread bitops ucontext
+	rm -f threads bitops ucontext

@@ -53,22 +53,23 @@ int main(void) {
     }
 
     //ADD YOUR CODE HERE
+    if (resumed_to_main) {
+        free(w1_stack);
+        w1_stack = NULL;
 
-
-
-
-
-
-
-
+        printf("In main: stack cleared\n");
+        return 0;
+    }
+        
     // Initialize worker context; link back to main
+    resumed_to_main = 1;
     init_context(&worker1_ctx, &w1_stack, worker1, &main_ctx);
-
     printf("In main: transferring control to worker using setcontext\n");
     if (setcontext(&worker1_ctx) == -1) {
         perror("setcontext(worker1)");
         return 1;
     }
+
 
     // Unreachable: setcontext does not return
     printf("In main: unreachable after setcontext\n");
