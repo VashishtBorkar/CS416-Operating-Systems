@@ -13,21 +13,69 @@ double avg_resp_time=0;
 
 
 // INITAILIZE ALL YOUR OTHER VARIABLES HERE
+
 // YOUR CODE HERE
 
+static void worker_start(void *(*func)(void *), void *arg) {
+    void *ret = func(arg);  // run the user's function
+    worker_exit(ret);       // call our thread cleanup logic
+}
 
 /* create a new thread */
 int worker_create(worker_t * thread, pthread_attr_t * attr, 
                       void *(*function)(void*), void * arg) {
 
-       // - create Thread Control Block (TCB)
-       // - create and initialize the context of this worker thread
-       // - allocate space of stack for this thread to run
-       // after everything is set, push this thread into run queue and 
-       // - make it ready for the execution.
+	// - create Thread Control Block (TCB)
+	// - create and initialize the context of this worker thread
+	// - allocate space of stack for this thread to run
+	// after everything is set, push this thread into run queue and 
+	// - make it ready for the execution.
 
-       // YOUR CODE HERE
+	// YOUR CODE HERE
+
+	// Create TCB
+	tcb *new_tcb = malloc(sizeof(tcb));
+	if (!new_tcb) {
+		perror("malloc for TCB failed");
+		return -1;
+	}
+
+	// Increment thread counter 
+	static int next_thread_id = 1;
+	new_tcb->id = next_thread_id++;
+
+	// Get context
+	if (getcontext(&new_tcb->context) == -1) {
+		perror("getcontext");
+		free(new_tcb);
+		return -1;
+	}
+
+	// Allocate stack
+	new_tcb->stack = malloc(4096);
+	if (!new_tcb->stack) {
+		perror("malloc stack");
+		free(new_tcb);
+		return -1;
+	}
+
+	// Set context data
+	new_tcb->context.uc_stack.ss_sp = new_tcb->stack;
+	new_tcb->context.uc_stack.ss_size = SIGSTKSZ;
+	new_tcb->context.uc_stack.ss_flags = 0;
+	new_tcb->context.uc_link = NULL; // you may set this later
+
+	// Set start for routine for context
+	makecontext(&new_tcb->context, (void (*)(void))worker_start, 2, function, arg);
+
+	// TCB Fields 
+	new_tcb->state = READY;
+    new_tcb->retval = NULL;
+    new_tcb->waiting_for = -1;
+
+	// TODO: Push to ready queue
 	
+
     return 0;
 };
 
@@ -159,7 +207,7 @@ static void schedule() {
 #elif defined(CFS)
     	sched_cfs();  
 #else
-	# error "Define one of PSJF, MLFQ, or CFS when compiling. e.g. make SCHED=MLFQ"
+	//# error "Define one of PSJF, MLFQ, or CFS when compiling. e.g. make SCHED=MLFQ"
 #endif
 }
 
