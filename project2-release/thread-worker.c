@@ -16,9 +16,15 @@ double avg_resp_time=0;
 static tcb *main_tcb = NULL; // main thread TCB
 static ucontext_t scheduler_context; // scheduler context
 
+// Ready queue
 static tcb *ready_head = NULL;
 static tcb *ready_tail = NULL;
 static tcb *running_tcb = NULL;
+
+// Timer and signal handling
+static struct itimerval timer;
+static struct sigaction sa;
+
 
 // YOUR CODE HERE
 
@@ -38,30 +44,43 @@ void enqueue_ready(tcb *thread) {
     }
 }
 
-void init_main_thread() {
-	if (main_tcb != NULL) {
-		return; // already initialized
+tcb *dequeue_ready() {
+    if (!ready_head) {
+		return NULL;
 	}
 
-	main_tcb = malloc(sizeof(tcb));
-	if (!main_tcb) {
-		perror("malloc for main TCB failed");
-		exit(1);
-	}
+    tcb *t = ready_head;
+    ready_head = ready_head->next;
 
-	if (getcontext(&main_tcb->context) == -1) {
-		perror("getcontext for main thread");
-		free(main_tcb);
-		exit(1);
-	}
+	// Empty queue
+    if (!ready_head){ 
+		ready_tail = NULL;
+	} 
 
-	main_tcb->id = 0; // main thread id
-	main_tcb->state = RUNNING;
-	main_tcb->stack = NULL; // main thread uses existing stack
-	main_tcb->retval = NULL;
-	main_tcb->waiting_for = -1;
+    t->next = NULL;
+    return t;
+}
 
-	running_tcb = main_tcb;
+void timer_handler(int signum) {
+    printf("Switching Threads \n");
+    // schedule();
+}
+
+void init_timer() {
+    memset(&sa, 0, sizeof(sa));
+    sa.sa_handler = &timer_handler;
+    sigaction(SIGPROF, &sa, NULL);
+
+    timer.it_interval.tv_sec = 0;
+    timer.it_interval.tv_usec = QUANTUM; // how often it repeats
+
+    timer.it_value.tv_sec = 0;
+    timer.it_value.tv_usec = QUANTUM;    // initial delay before first fire
+
+    if (setitimer(ITIMER_PROF, &timer, NULL) == -1) {
+        perror("setitimer");
+        exit(1);
+    }
 }
 
 void init_scheduler() {
@@ -88,6 +107,35 @@ void init_scheduler() {
 	scheduler_context.uc_link = NULL;
 
 	// makecontext(&scheduler_context, schedule, 0);
+}
+
+void init_main_thread() {
+	if (main_tcb != NULL) {
+		return; // already initialized
+	}
+
+	init_scheduler();
+    init_timer();
+
+	main_tcb = malloc(sizeof(tcb));
+	if (!main_tcb) {
+		perror("malloc for main TCB failed");
+		exit(1);
+	}
+
+	if (getcontext(&main_tcb->context) == -1) {
+		perror("getcontext for main thread");
+		free(main_tcb);
+		exit(1);
+	}
+
+	main_tcb->id = 0; // main thread id
+	main_tcb->state = RUNNING;
+	main_tcb->stack = NULL; // main thread uses existing stack
+	main_tcb->retval = NULL;
+	main_tcb->waiting_for = -1;
+
+	running_tcb = main_tcb;
 }
 
 int worker_create(worker_t * thread, pthread_attr_t * attr, 
@@ -158,6 +206,22 @@ int worker_yield() {
 	// - switch from thread context to scheduler context
 
 	// YOUR CODE HERE
+	init_main_thread();
+	init_scheduler();
+
+	tcb *current = running_tcb;
+	if(!current) {
+		perror("No running thread");
+		return -1;
+	}
+
+	current->state = READY;
+	enqueue_ready(current);
+
+	if(swapcontext(&current->context, &scheduler_context) == -1) {
+		perror("swapcontext to scheduler");
+		return -1;
+	}
 
 	return 0;
 };
@@ -165,9 +229,23 @@ int worker_yield() {
 /* terminate a thread */
 void worker_exit(void *value_ptr) {
 	// - de-allocate any dynamic memory created when starting this thread
-
 	// YOUR CODE HERE
+	init_scheduler();
+	init_main_thread();
+	
+	tcb *current = running_tcb;
+	if (!current) {
+		perror("No running thread");
+		exit(1);
+	}
+	current->state = TERMINATED;
+	current->retval = value_ptr;
+	if (current->stack) {
+		free(current->stack);
+		current->stack = NULL;
+	}
 };
+
 
 
 /* Wait for thread termination */
