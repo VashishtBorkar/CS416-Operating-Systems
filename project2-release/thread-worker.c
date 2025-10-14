@@ -13,6 +13,12 @@ double avg_resp_time=0;
 
 
 // INITAILIZE ALL YOUR OTHER VARIABLES HERE
+static tcb *main_tcb = NULL; // main thread TCB
+static ucontext_t scheduler_context; // scheduler context
+
+static tcb *ready_head = NULL;
+static tcb *ready_tail = NULL;
+static tcb *running_tcb = NULL;
 
 // YOUR CODE HERE
 
@@ -22,6 +28,68 @@ static void worker_start(void *(*func)(void *), void *arg) {
 }
 
 /* create a new thread */
+void enqueue_ready(tcb *thread) {
+    thread->next = NULL;
+    if (ready_tail) {
+        ready_tail->next = thread;
+        ready_tail = thread;
+    } else {
+        ready_head = ready_tail = thread;
+    }
+}
+
+void init_main_thread() {
+	if (main_tcb != NULL) {
+		return; // already initialized
+	}
+
+	main_tcb = malloc(sizeof(tcb));
+	if (!main_tcb) {
+		perror("malloc for main TCB failed");
+		exit(1);
+	}
+
+	if (getcontext(&main_tcb->context) == -1) {
+		perror("getcontext for main thread");
+		free(main_tcb);
+		exit(1);
+	}
+
+	main_tcb->id = 0; // main thread id
+	main_tcb->state = RUNNING;
+	main_tcb->stack = NULL; // main thread uses existing stack
+	main_tcb->retval = NULL;
+	main_tcb->waiting_for = -1;
+
+	running_tcb = main_tcb;
+}
+
+void init_scheduler() {
+	static int scheduler_initialized = 0;
+	if (scheduler_initialized) {
+		return; // already initialized
+	}
+	scheduler_initialized = 1;
+
+	if (getcontext(&scheduler_context) == -1) {
+		perror("getcontext for scheduler");
+		exit(1);
+	}
+
+	char *stack = malloc(SIGSTKSZ);
+	if (!stack) {
+		perror("malloc for scheduler stack");
+		exit(1);
+	}
+
+	scheduler_context.uc_stack.ss_sp = stack;
+	scheduler_context.uc_stack.ss_size = SIGSTKSZ;
+	scheduler_context.uc_stack.ss_flags = 0;
+	scheduler_context.uc_link = NULL;
+
+	// makecontext(&scheduler_context, schedule, 0);
+}
+
 int worker_create(worker_t * thread, pthread_attr_t * attr, 
                       void *(*function)(void*), void * arg) {
 
@@ -44,17 +112,17 @@ int worker_create(worker_t * thread, pthread_attr_t * attr,
 	static int next_thread_id = 1;
 	new_tcb->id = next_thread_id++;
 
-	// Get context
-	if (getcontext(&new_tcb->context) == -1) {
-		perror("getcontext");
+	// Allocate stack
+	new_tcb->stack = malloc(SIGSTKSZ);
+	if (!new_tcb->stack) {
+		perror("malloc stack");
 		free(new_tcb);
 		return -1;
 	}
 
-	// Allocate stack
-	new_tcb->stack = malloc(4096);
-	if (!new_tcb->stack) {
-		perror("malloc stack");
+	// Get context
+	if (getcontext(&new_tcb->context) == -1) {
+		perror("getcontext");
 		free(new_tcb);
 		return -1;
 	}
@@ -63,7 +131,7 @@ int worker_create(worker_t * thread, pthread_attr_t * attr,
 	new_tcb->context.uc_stack.ss_sp = new_tcb->stack;
 	new_tcb->context.uc_stack.ss_size = SIGSTKSZ;
 	new_tcb->context.uc_stack.ss_flags = 0;
-	new_tcb->context.uc_link = NULL; // you may set this later
+	new_tcb->context.uc_link = NULL;
 
 	// Set start for routine for context
 	makecontext(&new_tcb->context, (void (*)(void))worker_start, 2, function, arg);
@@ -72,9 +140,12 @@ int worker_create(worker_t * thread, pthread_attr_t * attr,
 	new_tcb->state = READY;
     new_tcb->retval = NULL;
     new_tcb->waiting_for = -1;
+	new_tcb->joined = 0;
+	new_tcb->next = NULL;
 
-	// TODO: Push to ready queue
-	
+	enqueue_ready(new_tcb);
+
+	*thread = new_tcb->id;
 
     return 0;
 };
@@ -87,7 +158,7 @@ int worker_yield() {
 	// - switch from thread context to scheduler context
 
 	// YOUR CODE HERE
-	
+
 	return 0;
 };
 

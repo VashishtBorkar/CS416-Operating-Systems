@@ -50,14 +50,22 @@ typedef struct TCB {
 	// Scheduling
 	int priority;
 	long vruntime;
+	long elapsed_quanta;
 	
 	// Synchronization
-	int waiting_for;
+	worker_t waiting_for;
+	int joined;
+
+	struct TCB *next;
 } tcb; 
 
 /* mutex struct definition */
 typedef struct worker_mutex_t {
 	/* add something here */
+	volatile int locked;
+	worker_t owner;
+	tcb *wait_head;
+	tcb *wait_tail;
 
 	// YOUR CODE HERE
 } worker_mutex_t;
