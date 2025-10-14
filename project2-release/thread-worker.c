@@ -38,6 +38,19 @@ void enqueue_ready(tcb *thread) {
     }
 }
 
+void tcb* dequeue_ready() {
+	if (!ready_head) {
+		return NULL;
+	}
+	tcb *thread = ready_head;
+	ready_head = ready_head->next;
+	if (!ready_head) {
+		ready_tail = NULL;
+	}
+	thread->next = NULL;
+	return thread;
+}
+
 void init_main_thread() {
 	if (main_tcb != NULL) {
 		return; // already initialized
@@ -158,6 +171,22 @@ int worker_yield() {
 	// - switch from thread context to scheduler context
 
 	// YOUR CODE HERE
+	init_main_thread();
+	init_scheduler();
+
+	tcb *current = running_tcb;
+	if(!current) {
+		perror("No running thread");
+		return -1;
+	}
+
+	current->state = READY;
+	enqueue_ready(current);
+
+	if(swapcontext(&current->context, &scheduler_context) == -1) {
+		perror("swapcontext to scheduler");
+		return -1;
+	}
 
 	return 0;
 };
