@@ -242,8 +242,21 @@ int worker_yield() {
 /* terminate a thread */
 void worker_exit(void *value_ptr) {
 	// - de-allocate any dynamic memory created when starting this thread
-
 	// YOUR CODE HERE
+	init_scheduler();
+	init_main_thread();
+	
+	tcb *current = running_tcb;
+	if (!current) {
+		perror("No running thread");
+		exit(1);
+	}
+	current->state = TERMINATED;
+	current->retval = value_ptr;
+	if (current->stack) {
+		free(current->stack);
+		current->stack = NULL;
+	}
 };
 
 
