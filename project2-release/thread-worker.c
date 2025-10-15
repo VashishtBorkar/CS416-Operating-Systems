@@ -17,9 +17,15 @@ static tcb *main_tcb = NULL; // main thread TCB
 static ucontext_t scheduler_context; // scheduler context
 
 // Ready queue
+// Ready queue
 static tcb *ready_head = NULL;
 static tcb *ready_tail = NULL;
 static tcb *running_tcb = NULL;
+
+// Timer and signal handling
+static struct itimerval timer;
+static struct sigaction sa;
+
 
 // Timer and signal handling
 static struct itimerval timer;
@@ -42,6 +48,19 @@ void enqueue_ready(tcb *thread) {
     } else {
         ready_head = ready_tail = thread;
     }
+}
+
+void tcb* dequeue_ready() {
+	if (!ready_head) {
+		return NULL;
+	}
+	tcb *thread = ready_head;
+	ready_head = ready_head->next;
+	if (!ready_head) {
+		ready_tail = NULL;
+	}
+	thread->next = NULL;
+	return thread;
 }
 
 tcb *dequeue_ready() {
@@ -107,6 +126,35 @@ void init_scheduler() {
 	scheduler_context.uc_link = NULL;
 
 	// makecontext(&scheduler_context, schedule, 0);
+}
+
+void init_main_thread() {
+	if (main_tcb != NULL) {
+		return; // already initialized
+	}
+
+	init_scheduler();
+    init_timer();
+
+	main_tcb = malloc(sizeof(tcb));
+	if (!main_tcb) {
+		perror("malloc for main TCB failed");
+		exit(1);
+	}
+
+	if (getcontext(&main_tcb->context) == -1) {
+		perror("getcontext for main thread");
+		free(main_tcb);
+		exit(1);
+	}
+
+	main_tcb->id = 0; // main thread id
+	main_tcb->state = RUNNING;
+	main_tcb->stack = NULL; // main thread uses existing stack
+	main_tcb->retval = NULL;
+	main_tcb->waiting_for = -1;
+
+	running_tcb = main_tcb;
 }
 
 void init_main_thread() {
@@ -222,6 +270,22 @@ int worker_yield() {
 		perror("swapcontext to scheduler");
 		return -1;
 	}
+	init_main_thread();
+	init_scheduler();
+
+	tcb *current = running_tcb;
+	if(!current) {
+		perror("No running thread");
+		return -1;
+	}
+
+	current->state = READY;
+	enqueue_ready(current);
+
+	if(swapcontext(&current->context, &scheduler_context) == -1) {
+		perror("swapcontext to scheduler");
+		return -1;
+	}
 
 	return 0;
 };
@@ -230,6 +294,20 @@ int worker_yield() {
 void worker_exit(void *value_ptr) {
 	// - de-allocate any dynamic memory created when starting this thread
 	// YOUR CODE HERE
+	init_scheduler();
+	init_main_thread();
+	
+	tcb *current = running_tcb;
+	if (!current) {
+		perror("No running thread");
+		exit(1);
+	}
+	current->state = TERMINATED;
+	current->retval = value_ptr;
+	if (current->stack) {
+		free(current->stack);
+		current->stack = NULL;
+	}
 	init_scheduler();
 	init_main_thread();
 	
