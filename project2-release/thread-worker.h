@@ -30,6 +30,7 @@
 #include <sys/ucontext.h>
 #include <signal.h>
 #include <sys/time.h>
+#include <stdatomic.h>
 
 typedef uint worker_t;
 enum thread_state { READY, RUNNING, BLOCKED, TERMINATED };
@@ -54,25 +55,34 @@ typedef struct TCB {
 	long elapsed_quanta;
 	
 	// Synchronization
-	worker_t waiting_for;
+	// worker_t waiting_for; // thread id this thread is waiting for
+	struct TCB *waiting_thread; // thread waiting on this thread
 	int joined;
 
-	struct TCB *next;
-} tcb; 
+} tcb_t; 
 
 /* mutex struct definition */
 typedef struct worker_mutex_t {
 	/* add something here */
-	volatile int locked;
+	int locked;
 	worker_t owner;
-	tcb *wait_head;
-	tcb *wait_tail;
+	tcb_t *owner_tcb;
+	Queue_t * wait_queue;
 
-	// YOUR CODE HERE
 } worker_mutex_t;
 
 /* define your data structures here: */
 // Feel free to add your own auxiliary data structures (linked list or queue etc...)
+typedef struct Node_t {
+	tcb_t *data;
+	struct Node_t *next;
+} Node_t;
+
+typedef struct Queue_t {
+	Node_t *head;
+	Node_t *tail;
+} Queue_t;
+
 
 // YOUR CODE HERE
 
@@ -120,5 +130,4 @@ void print_app_stats(void);
 #define pthread_mutex_unlock worker_mutex_unlock
 #define pthread_mutex_destroy worker_mutex_destroy
 #endif
-
 #endif

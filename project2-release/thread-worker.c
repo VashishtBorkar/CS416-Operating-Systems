@@ -13,78 +13,82 @@ double avg_resp_time=0;
 
 
 // INITAILIZE ALL YOUR OTHER VARIABLES HERE
-static tcb *main_tcb = NULL; // main thread TCB
+static tcb_t *main_tcb = NULL; // main thread TCB
 static ucontext_t scheduler_context; // scheduler context
 
 // Ready queue
-// Ready queue
-static tcb *ready_head = NULL;
-static tcb *ready_tail = NULL;
-static tcb *running_tcb = NULL;
+static Queue_t ready_queue;
+static tcb_t *ready_head = NULL;
+static tcb_t *ready_tail = NULL;
+static tcb_t *running_tcb = NULL;
 
 // Timer and signal handling
 static struct itimerval timer;
 static struct sigaction sa;
-
-
-// Timer and signal handling
-static struct itimerval timer;
-static struct sigaction sa;
-
 
 // YOUR CODE HERE
 
-static void worker_start(void *(*func)(void *), void *arg) {
-    void *ret = func(arg);  // run the user's function
-    worker_exit(ret);       // call our thread cleanup logic
+// General queue implementation
+void init_queue(Queue_t *queue) {
+	queue->head = NULL;
+	queue->tail = NULL;
 }
 
-/* create a new thread */
-void enqueue_ready(tcb *thread) {
-    thread->next = NULL;
-    if (ready_tail) {
-        ready_tail->next = thread;
-        ready_tail = thread;
+void enqueue(Queue_t *queue, tcb_t* data) {
+	Node_t *node = malloc(sizeof(Node_t));
+	node->data = data;
+	node->next = NULL;
+
+	if (queue->tail) {
+		queue->tail->next = node;
+	} else {
+		queue->head = node;
+	}
+
+	queue->tail = node;
+}
+
+tcb_t *dequeue(Queue_t *q) {
+    if (!q->head) {
+		return NULL;
+	}
+
+    Node_t *node = q->head;
+    tcb_t *data = node->data;
+    q->head = node->next;
+
+    if (!q->head)
+        q->tail = NULL;
+    free(node);
+
+    return data;
+}
+
+int is_empty(Queue_t *q) {
+	return q->head == NULL;
+}
+
+// Ready queue functions
+void enqueue_ready(tcb_t* thread) {
+	thread->state = READY;
+	enqueue(&ready_queue, thread);
+}
+
+tcb_t* dequeue_ready() {
+	return dequeue(&ready_queue);
+}
+
+
+void timer_handler(int signum) {
+    if (running_tcb) {
+        // save current and switch to scheduler
+        swapcontext(&running_tcb->context, &scheduler_context);
     } else {
-        ready_head = ready_tail = thread;
+        swapcontext(&scheduler_context, &scheduler_context);
     }
 }
 
-void tcb* dequeue_ready() {
-	if (!ready_head) {
-		return NULL;
-	}
-	tcb *thread = ready_head;
-	ready_head = ready_head->next;
-	if (!ready_head) {
-		ready_tail = NULL;
-	}
-	thread->next = NULL;
-	return thread;
-}
-
-tcb *dequeue_ready() {
-    if (!ready_head) {
-		return NULL;
-	}
-
-    tcb *t = ready_head;
-    ready_head = ready_head->next;
-
-	// Empty queue
-    if (!ready_head){ 
-		ready_tail = NULL;
-	} 
-
-    t->next = NULL;
-    return t;
-}
-
-void timer_handler(int signum) {
-    printf("Switching Threads \n");
-    // schedule();
-}
-
+// Main thread set up
 void init_timer() {
     memset(&sa, 0, sizeof(sa));
     sa.sa_handler = &timer_handler;
@@ -109,6 +113,7 @@ void init_scheduler() {
 	}
 	scheduler_initialized = 1;
 
+	init_queue(&ready_queue);
 	if (getcontext(&scheduler_context) == -1) {
 		perror("getcontext for scheduler");
 		exit(1);
@@ -125,7 +130,7 @@ void init_scheduler() {
 	scheduler_context.uc_stack.ss_flags = 0;
 	scheduler_context.uc_link = NULL;
 
-	// makecontext(&scheduler_context, schedule, 0);
+	makecontext(&scheduler_context, (void (*)(void))schedule, 0);
 }
 
 void init_main_thread() {
@@ -136,7 +141,7 @@ void init_main_thread() {
 	init_scheduler();
     init_timer();
 
-	main_tcb = malloc(sizeof(tcb));
+	main_tcb = malloc(sizeof(tcb_t));
 	if (!main_tcb) {
 		perror("malloc for main TCB failed");
 		exit(1);
@@ -152,38 +157,27 @@ void init_main_thread() {
 	main_tcb->state = RUNNING;
 	main_tcb->stack = NULL; // main thread uses existing stack
 	main_tcb->retval = NULL;
-	main_tcb->waiting_for = -1;
+	// main_tcb->waiting_for = -1;
 
 	running_tcb = main_tcb;
 }
 
-void init_main_thread() {
-	if (main_tcb != NULL) {
-		return; // already initialized
-	}
 
-	init_scheduler();
-    init_timer();
+tcb_t *find_tcb_by_id(worker_t id) {
+    tcb_t *temp = ready_head; // wherever you store TCBs
+    while (temp) {
+        if (temp->id == id)
+            return temp;
+        temp = temp->next;
+    }
+    return NULL;
+}
 
-	main_tcb = malloc(sizeof(tcb));
-	if (!main_tcb) {
-		perror("malloc for main TCB failed");
-		exit(1);
-	}
-
-	if (getcontext(&main_tcb->context) == -1) {
-		perror("getcontext for main thread");
-		free(main_tcb);
-		exit(1);
-	}
-
-	main_tcb->id = 0; // main thread id
-	main_tcb->state = RUNNING;
-	main_tcb->stack = NULL; // main thread uses existing stack
-	main_tcb->retval = NULL;
-	main_tcb->waiting_for = -1;
-
-	running_tcb = main_tcb;
+static void worker_start(void *(*func)(void *), void *arg) {
+	/* Helper function for worker_create */
+	
+    void *ret = func(arg);  // run the user's function
+    worker_exit(ret);       // call our thread cleanup logic
 }
 
 int worker_create(worker_t * thread, pthread_attr_t * attr, 
@@ -198,7 +192,7 @@ int worker_create(worker_t * thread, pthread_attr_t * attr,
 	// YOUR CODE HERE
 
 	// Create TCB
-	tcb *new_tcb = malloc(sizeof(tcb));
+	tcb_t *new_tcb = malloc(sizeof(tcb_t));
 	if (!new_tcb) {
 		perror("malloc for TCB failed");
 		return -1;
@@ -235,7 +229,7 @@ int worker_create(worker_t * thread, pthread_attr_t * attr,
 	// TCB Fields 
 	new_tcb->state = READY;
     new_tcb->retval = NULL;
-    new_tcb->waiting_for = -1;
+    // new_tcb->waiting_for = -1;
 	new_tcb->joined = 0;
 	new_tcb->next = NULL;
 
@@ -254,26 +248,7 @@ int worker_yield() {
 	// - switch from thread context to scheduler context
 
 	// YOUR CODE HERE
-	init_main_thread();
-	init_scheduler();
-
-	tcb *current = running_tcb;
-	if(!current) {
-		perror("No running thread");
-		return -1;
-	}
-
-	current->state = READY;
-	enqueue_ready(current);
-
-	if(swapcontext(&current->context, &scheduler_context) == -1) {
-		perror("swapcontext to scheduler");
-		return -1;
-	}
-	init_main_thread();
-	init_scheduler();
-
-	tcb *current = running_tcb;
+	tcb_t *current = running_tcb;
 	if(!current) {
 		perror("No running thread");
 		return -1;
@@ -294,10 +269,8 @@ int worker_yield() {
 void worker_exit(void *value_ptr) {
 	// - de-allocate any dynamic memory created when starting this thread
 	// YOUR CODE HERE
-	init_scheduler();
-	init_main_thread();
-	
-	tcb *current = running_tcb;
+
+	tcb_t *current = running_tcb;
 	if (!current) {
 		perror("No running thread");
 		exit(1);
@@ -308,23 +281,14 @@ void worker_exit(void *value_ptr) {
 		free(current->stack);
 		current->stack = NULL;
 	}
-	init_scheduler();
-	init_main_thread();
-	
-	tcb *current = running_tcb;
-	if (!current) {
-		perror("No running thread");
-		exit(1);
-	}
-	current->state = TERMINATED;
-	current->retval = value_ptr;
-	if (current->stack) {
-		free(current->stack);
-		current->stack = NULL;
-	}
-};
 
-
+	if (current->waiting_thread != NULL) {
+		tcb_t *waiting = current->waiting_thread;
+		waiting->state = READY;
+		enqueue_ready(current->waiting_thread);
+		current->waiting_thread = NULL;
+	}
+}
 
 /* Wait for thread termination */
 int worker_join(worker_t thread, void **value_ptr) {
@@ -333,6 +297,43 @@ int worker_join(worker_t thread, void **value_ptr) {
 	// - de-allocate any dynamic memory created by the joining thread
   
 	// YOUR CODE HERE
+	tcb_t *target = find_tcb_by_id(thread);
+	if (!target) {
+		fprintf(stderr, "worker_join: no such thread %u\n", thread);
+		return -1;
+	}
+
+	// Prevent multiple joins
+	if (target->joined) {
+        fprintf(stderr, "worker_join: thread already joined\n");
+        return -1;
+    }
+
+	// If already terminated, clean up and return
+	if (target->state == TERMINATED) {
+		if (value_ptr) {
+			*value_ptr = target->retval;
+		}
+		free(target);
+		return 0;
+	}
+
+	// Otherwise block current and join
+	target->joined = 1;
+
+	tcb_t *current = running_tcb;
+	current->state = BLOCKED;
+	target->waiting_thread = current;
+
+	swapcontext(&current->context, &scheduler_context);
+
+	if (value_ptr) {
+        *value_ptr = target->retval;
+	}
+
+	free(target->stack);
+	free(target);
+	
 	return 0;
 };
 
@@ -340,8 +341,13 @@ int worker_join(worker_t thread, void **value_ptr) {
 int worker_mutex_init(worker_mutex_t *mutex, 
                           const pthread_mutexattr_t *mutexattr) {
 	//- initialize data structures for this mutex
+	if (!mutex) {
+		return -1;
+	}
 
-	// YOUR CODE HERE
+	mutex->locked = 0;
+	mutex->owner_tcb = NULL;
+	mutex->wait_queue = init_queue(malloc(sizeof(Queue_t)));
 	return 0;
 };
 
@@ -354,6 +360,19 @@ int worker_mutex_lock(worker_mutex_t *mutex) {
         // context switch to the scheduler thread
 
         // YOUR CODE HERE
+		int expected = 0;
+
+		if (!mutex->locked) {
+			mutex->locked = 1;
+			mutex->owner_tcb = running_tcb;
+			return 0;
+		}
+		// Mutex is locked
+
+		enqueue(mutex->wait_queue, running_tcb);
+		worker_yield();
+
+		mutex->owner_tcb = running_tcb;
         return 0;
 };
 
@@ -364,6 +383,20 @@ int worker_mutex_unlock(worker_mutex_t *mutex) {
 	// so that they could compete for mutex later.
 
 	// YOUR CODE HERE
+	if (mutex->owner_tcb != running_tcb) {
+		fprintf(stderr, "worker_mutex_unlock: current thread does not own the mutex\n");
+		return -1;
+	}
+	
+	if (is_empty(mutex->wait_queue)) {
+		// No waiting threads
+		mutex->owner_tcb = NULL;
+		mutex->locked = 0;
+	} else {
+		mutex->owner_tcb = dequeue(mutex->wait_queue);
+	}
+
+
 	return 0;
 };
 
@@ -425,16 +458,34 @@ static void schedule() {
 	// schedule() function
 	
 	//YOUR CODE HERE
-
+    if (running_tcb && running_tcb->state == RUNNING) {
+        running_tcb->state = READY;
+        enqueue_ready(running_tcb);
+    }
+	
 	// - invoke scheduling algorithms according to the policy (PSJF or MLFQ or CFS)
 #if defined(PSJF)
     	sched_psjf();
 #elif defined(MLFQ)
-	sched_mlfq();
+		sched_mlfq();
 #elif defined(CFS)
     	sched_cfs();  
 #else
 	//# error "Define one of PSJF, MLFQ, or CFS when compiling. e.g. make SCHED=MLFQ"
+	// Simple round robin
+	printf("Simple RR Scheduling\n");
+	tcb_t *next = dequeue_ready();
+    if (next) {
+        next->state = RUNNING;
+        running_tcb = next;
+        setcontext(&running_tcb->context);
+    } else {
+		printf("No ready threads. Returning to main thread.\n");
+		setcontext(&main_tcb->context);
+		return;
+	}
+
+	// perror("No scheduling policy defined");
 #endif
 }
 
