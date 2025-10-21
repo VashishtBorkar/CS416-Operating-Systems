@@ -64,10 +64,10 @@ typedef struct TCB {
 /* mutex struct definition */
 typedef struct worker_mutex_t {
 	/* add something here */
-	int locked;
+	atomic_flag locked;
 	worker_t owner;
 	tcb_t *owner_tcb;
-	Queue_t * wait_queue;
+	Queue_t wait_queue;
 
 } worker_mutex_t;
 

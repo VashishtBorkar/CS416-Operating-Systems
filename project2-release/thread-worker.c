@@ -35,6 +35,10 @@ void init_queue(Queue_t *queue) {
 }
 
 void enqueue(Queue_t *queue, tcb_t* data) {
+	if (!queue) {
+		fprintf(stderr, "enqueue: queue not initialized\n");
+		return;
+	}
 	Node_t *node = malloc(sizeof(Node_t));
 	node->data = data;
 	node->next = NULL;
@@ -48,28 +52,34 @@ void enqueue(Queue_t *queue, tcb_t* data) {
 	queue->tail = node;
 }
 
-tcb_t *dequeue(Queue_t *q) {
-    if (!q->head) {
+tcb_t *dequeue(Queue_t *queue) {
+	if (!queue) {
+		fprintf(stderr, "dequeue: queue not initialized\n");
+		return;
+	}
+
+    if (!queue->head) {
 		return NULL;
 	}
 
-    Node_t *node = q->head;
+    Node_t *node = queue->head;
     tcb_t *data = node->data;
-    q->head = node->next;
+    queue->head = node->next;
 
-    if (!q->head)
-        q->tail = NULL;
+    if (!queue->head)
+        queue->tail = NULL;
     free(node);
 
     return data;
 }
 
-int is_empty(Queue_t *q) {
-	return q->head == NULL;
+int is_empty(Queue_t *queue) {
+	return queue->head == NULL;
 }
 
+
 // Ready queue functions
-void enqueue_ready(tcb_t* thread) {
+void add_scheduler(tcb_t* thread) {
 	thread->state = READY;
 	enqueue(&ready_queue, thread);
 }
@@ -162,7 +172,6 @@ void init_main_thread() {
 	running_tcb = main_tcb;
 }
 
-
 tcb_t *find_tcb_by_id(worker_t id) {
     tcb_t *temp = ready_head; // wherever you store TCBs
     while (temp) {
@@ -175,7 +184,6 @@ tcb_t *find_tcb_by_id(worker_t id) {
 
 static void worker_start(void *(*func)(void *), void *arg) {
 	/* Helper function for worker_create */
-	
     void *ret = func(arg);  // run the user's function
     worker_exit(ret);       // call our thread cleanup logic
 }
@@ -233,7 +241,7 @@ int worker_create(worker_t * thread, pthread_attr_t * attr,
 	new_tcb->joined = 0;
 	new_tcb->next = NULL;
 
-	enqueue_ready(new_tcb);
+	add_scheduler(new_tcb);
 
 	*thread = new_tcb->id;
 
@@ -255,7 +263,7 @@ int worker_yield() {
 	}
 
 	current->state = READY;
-	enqueue_ready(current);
+	add_scheduler(current);
 
 	if(swapcontext(&current->context, &scheduler_context) == -1) {
 		perror("swapcontext to scheduler");
@@ -285,7 +293,7 @@ void worker_exit(void *value_ptr) {
 	if (current->waiting_thread != NULL) {
 		tcb_t *waiting = current->waiting_thread;
 		waiting->state = READY;
-		enqueue_ready(current->waiting_thread);
+		add_scheduler(current->waiting_thread);
 		current->waiting_thread = NULL;
 	}
 }
@@ -342,12 +350,13 @@ int worker_mutex_init(worker_mutex_t *mutex,
                           const pthread_mutexattr_t *mutexattr) {
 	//- initialize data structures for this mutex
 	if (!mutex) {
+		fprintf(stderr, "worker_mutex_init: mutex is NULL\n");
 		return -1;
 	}
 
-	mutex->locked = 0;
+	atomic_flag_clear(&mutex->locked);
 	mutex->owner_tcb = NULL;
-	mutex->wait_queue = init_queue(malloc(sizeof(Queue_t)));
+	init_queue(&mutex->wait_queue);
 	return 0;
 };
 
@@ -360,20 +369,32 @@ int worker_mutex_lock(worker_mutex_t *mutex) {
         // context switch to the scheduler thread
 
         // YOUR CODE HERE
-		int expected = 0;
+		if (!mutex) {
+			fprintf(stderr, "worker_mutex_lock: mutex is NULL\n");
+			return -1;
+		}
 
-		if (!mutex->locked) {
-			mutex->locked = 1;
+		if(!atomic_flag_test_and_set(&mutex->locked)) {
 			mutex->owner_tcb = running_tcb;
 			return 0;
+		} 
+
+		// block thread if mutx is locked
+		running_tcb->state = BLOCKED;
+		enqueue(&mutex->wait_queue, running_tcb);
+		
+		// switch to scheduler
+		tcb_t *current = running_tcb;
+		running_tcb = NULL;
+
+		if(swapcontext(&current->context, &scheduler_context) == -1) {
+			perror("swapcontext to scheduler");
+			return -1;
 		}
-		// Mutex is locked
-
-		enqueue(mutex->wait_queue, running_tcb);
-		worker_yield();
-
+		
+		// acquired the lock		
 		mutex->owner_tcb = running_tcb;
-        return 0;
+    	return 0;
 };
 
 /* release the mutex lock */
@@ -383,19 +404,26 @@ int worker_mutex_unlock(worker_mutex_t *mutex) {
 	// so that they could compete for mutex later.
 
 	// YOUR CODE HERE
+	if (!mutex) {
+		fprintf(stderr, "worker_mutex_unlock: mutex is NULL\n");
+		return -1;
+	}
+
 	if (mutex->owner_tcb != running_tcb) {
 		fprintf(stderr, "worker_mutex_unlock: current thread does not own the mutex\n");
 		return -1;
 	}
 	
-	if (is_empty(mutex->wait_queue)) {
-		// No waiting threads
-		mutex->owner_tcb = NULL;
-		mutex->locked = 0;
-	} else {
-		mutex->owner_tcb = dequeue(mutex->wait_queue);
-	}
+	mutex->owner_tcb = NULL;
 
+	if (!is_empty(&mutex->wait_queue)) {
+		// No waiting threads
+		tcb_t *woken_thread = dequeue(&mutex->wait_queue);
+        woken_thread->state = READY;
+        add_scheduler(woken_thread);
+	} 
+	
+	atomic_flag_clear(&mutex->locked);
 
 	return 0;
 };
@@ -404,6 +432,22 @@ int worker_mutex_unlock(worker_mutex_t *mutex) {
 /* destroy the mutex */
 int worker_mutex_destroy(worker_mutex_t *mutex) {
 	// - de-allocate dynamic memory created in worker_mutex_init
+	if (!mutex) {
+		fprintf(stderr, "worker_mutex_destroy: mutex is NULL\n");
+		return -1;
+	}
+
+	if (atomic_flag_test_and_set(&mutex->locked)) {
+		fprintf(stderr, "worker_mutex_destroy: mutex is still locked\n");
+		return -1;
+	}
+
+	atomic_flag_clear(&mutex->locked);
+
+	if (!is_empty(&mutex->wait_queue)) {
+		fprintf(stderr, "worker_mutex_destroy: threads are still waiting on the mutex\n");
+		return -1;
+	}
 
 	return 0;
 };
@@ -460,7 +504,7 @@ static void schedule() {
 	//YOUR CODE HERE
     if (running_tcb && running_tcb->state == RUNNING) {
         running_tcb->state = READY;
-        enqueue_ready(running_tcb);
+        add_scheduler(running_tcb);
     }
 	
 	// - invoke scheduling algorithms according to the policy (PSJF or MLFQ or CFS)
