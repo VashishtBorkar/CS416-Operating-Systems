@@ -21,6 +21,8 @@
 /* Time slice quantum in milliseconds */
 #define QUANTUM 10
 
+#define MAX_THREADS 128 // 64 on piazza
+
 /* include lib header files that you need here: */
 #include <unistd.h>
 #include <sys/syscall.h>
@@ -31,6 +33,8 @@
 #include <signal.h>
 #include <sys/time.h>
 #include <stdatomic.h>
+
+#include "datastructures.h"
 
 typedef uint worker_t;
 enum thread_state { READY, RUNNING, BLOCKED, TERMINATED };
@@ -73,16 +77,6 @@ typedef struct worker_mutex_t {
 
 /* define your data structures here: */
 // Feel free to add your own auxiliary data structures (linked list or queue etc...)
-typedef struct Node_t {
-	tcb_t *data;
-	struct Node_t *next;
-} Node_t;
-
-typedef struct Queue_t {
-	Node_t *head;
-	Node_t *tail;
-} Queue_t;
-
 
 // YOUR CODE HERE
 
