@@ -23,6 +23,9 @@ static tcb_t* thread_table[MAX_THREADS];
 static int thread_count = 0;
 
 static Queue_t ready_queue;
+static Queue_t rr_queue; 
+
+static void schedule();
 
 // Timer and signal handling
 static struct itimerval timer;
@@ -30,26 +33,59 @@ static struct sigaction sa;
 
 // YOUR CODE HERE
 
-// Ready queue functions
-void add_scheduler(tcb_t* thread) {
-	thread->state = READY;
-	enqueue(&ready_queue, thread);
+
+
+// Thread table functions
+tcb_t *find_tcb_by_id(worker_t id) {
+    for (int i = 0; i < MAX_THREADS; i++) {
+		if (thread_table[i] != NULL && thread_table[i]->id == id) {
+			return thread_table[i];
+		}
+	}
+
+	return NULL; // not found 
 }
 
-tcb_t* dequeue_ready() {
-	return dequeue(&ready_queue);
+int add_thread_to_table(tcb_t *thread) {
+    for (int i = 0; i < MAX_THREADS; i++) {
+        if (thread_table[i] == NULL) {
+            thread_table[i] = thread;
+            thread_count++;
+            return i;
+        }
+    }
+    return -1; // Table full
 }
 
-void timer_handler(int signum) {
-    if (running_tcb) {
-        // save current and switch to scheduler
-        swapcontext(&running_tcb->context, &scheduler_context);
-    } else {
-        swapcontext(&scheduler_context, &scheduler_context);
+void remove_thread_from_table(worker_t id) {
+    for (int i = 0; i < MAX_THREADS; i++) {
+        if (thread_table[i] != NULL && thread_table[i]->id == id) {
+			thread_table[i] = NULL;
+			thread_count--;
+			return;
+        }
     }
 }
 
+
 // Main thread set up
+void timer_handler(int signum) {
+    if (running_tcb) {
+        // save current and switch to scheduler
+		tcb_t* current = running_tcb;
+		current->state = READY;
+		
+		add_to_scheduler(current);
+
+		running_tcb = NULL;
+		
+        if(swapcontext(&current->context, &scheduler_context) == -1) {
+			perror("swapcontext in timer_handler");
+			exit(1);
+		}
+    } 
+}
+
 void init_timer() {
     memset(&sa, 0, sizeof(sa));
     sa.sa_handler = &timer_handler;
@@ -131,38 +167,6 @@ void init_main_thread() {
 	running_tcb = main_tcb;
 }
 
-tcb_t *find_tcb_by_id(worker_t id) {
-    for (int i = 0; i < MAX_THREADS; i++) {
-		if (thread_table[i] != NULL && thread_table[i]->id == id) {
-			return thread_table[i];
-		}
-	}
-
-	return NULL; // not found 
-}
-
-int add_thread_to_table(tcb_t *thread) {
-    for (int i = 0; i < MAX_THREADS; i++) {
-        if (thread_table[i] == NULL) {
-            thread_table[i] = thread;
-            thread_count++;
-            return i;
-        }
-    }
-    return -1; // Table full
-}
-
-void remove_thread_from_table(worker_t id) {
-    for (int i = 0; i < MAX_THREADS; i++) {
-        if (thread_table[i] != NULL && thread_table[i]->id == id) {
-			thread_table[i] = NULL;
-			thread_count--;
-			return;
-        }
-    }
-}
-
-
 static void worker_start(void *(*func)(void *), void *arg) {
 	/* Helper function for worker_create */
     void *ret = func(arg);  // run the user's function
@@ -180,6 +184,10 @@ int worker_create(worker_t * thread, pthread_attr_t * attr,
 
 	// YOUR CODE HERE
 
+	if (!main_tcb) {
+		init_main_thread();
+	}
+	
 	// Create TCB
 	tcb_t *new_tcb = malloc(sizeof(tcb_t));
 	if (!new_tcb) {
@@ -210,11 +218,9 @@ int worker_create(worker_t * thread, pthread_attr_t * attr,
 	new_tcb->context.uc_stack.ss_sp = new_tcb->stack;
 	new_tcb->context.uc_stack.ss_size = SIGSTKSZ;
 	new_tcb->context.uc_stack.ss_flags = 0;
-	new_tcb->context.uc_link = NULL;
+	new_tcb->context.uc_link = &scheduler_context;
 
 	makecontext(&new_tcb->context, (void (*)(void))worker_start, 2, function, arg);
-
-	
 
 	// TCB Fields 
 	new_tcb->state = READY;
@@ -229,7 +235,7 @@ int worker_create(worker_t * thread, pthread_attr_t * attr,
         return -1;
     }
 
-	add_scheduler(new_tcb);
+	add_to_scheduler(new_tcb);
 
 	*thread = new_tcb->id;
 
@@ -251,7 +257,8 @@ int worker_yield() {
 	}
 
 	current->state = READY;
-	add_scheduler(current);
+
+	add_to_scheduler(current);
 
 	if(swapcontext(&current->context, &scheduler_context) == -1) {
 		perror("swapcontext to scheduler");
@@ -271,20 +278,27 @@ void worker_exit(void *value_ptr) {
 		perror("No running thread");
 		exit(1);
 	}
-	
+
 	current->state = TERMINATED;
 	current->retval = value_ptr;
-	if (current->stack) {
-		free(current->stack);
-		current->stack = NULL;
-	}
+	// if (current->stack) {
+	// 	free(current->stack);
+	// 	current->stack = NULL;
+	// }
 
 	if (current->waiting_thread != NULL) {
 		tcb_t *waiting = current->waiting_thread;
 		waiting->state = READY;
-		add_scheduler(current->waiting_thread);
+		add_to_scheduler(current->waiting_thread);
 		current->waiting_thread = NULL;
 	}
+
+	running_tcb = NULL;
+
+	if (swapcontext(&current->context, &scheduler_context) == -1) {
+        perror("worker_exit: swapcontext");
+        exit(1);
+    }
 }
 
 /* Wait for thread termination */
@@ -409,7 +423,7 @@ int worker_mutex_unlock(worker_mutex_t *mutex) {
 		// No waiting threads
 		tcb_t *woken_thread = dequeue(&mutex->wait_queue);
         woken_thread->state = READY;
-        add_scheduler(woken_thread);
+        add_to_scheduler(woken_thread);
 	} 
 	
 	atomic_flag_clear(&mutex->locked);
@@ -483,6 +497,34 @@ static void sched_cfs(){
 	// Step6: Run the selected thread
 }
 
+static void sched_rr() {
+	// Simple Round Robin Scheduling
+	tcb_t *next = dequeue(&rr_queue);
+	if (next) {
+		next->state = RUNNING;
+		running_tcb = next;
+		setcontext(&running_tcb->context);
+	} else {
+		printf("No ready threads. Returning to main thread.\n");
+		setcontext(&main_tcb->context);
+		return;
+	}
+}
+
+// Scheduler helpers
+void add_to_scheduler(tcb_t* thread) {
+#if defined(PSJF)
+	// add to PSJF heap
+#elif defined(MLFQ)
+	// add to MLFQ queues
+#elif defined(CFS)
+	// add to cfs heap
+#elif defined(RR)
+	enqueue(&rr_queue, thread);
+#else
+	perror("No scheduling policy defined");
+#endif
+}
 
 /* scheduler */
 static void schedule() {
@@ -493,28 +535,30 @@ static void schedule() {
 	//YOUR CODE HERE
 	
 	// - invoke scheduling algorithms according to the policy (PSJF or MLFQ or CFS)
-#if defined(PSJF)
-    	sched_psjf();
-#elif defined(MLFQ)
-		sched_mlfq();
-#elif defined(CFS)
-    	sched_cfs();  
-#else
-	//# error "Define one of PSJF, MLFQ, or CFS when compiling. e.g. make SCHED=MLFQ"
-	// Simple round robin
-	printf("Simple RR Scheduling\n");
-	tcb_t *next = dequeue_ready();
-    if (next) {
-        next->state = RUNNING;
-        running_tcb = next;
-        setcontext(&running_tcb->context);
-    } else {
-		printf("No ready threads. Returning to main thread.\n");
-		setcontext(&main_tcb->context);
-		return;
-	}
 
-	// perror("No scheduling policy defined");
+	if (running_tcb && running_tcb->state == TERMINATED) {
+        tcb_t *terminated = running_tcb;
+
+        // Free stack safely (scheduler isn’t using it)
+        if (terminated->stack) {
+            free(terminated->stack);
+            terminated->stack = NULL;
+        }
+
+        remove_thread_from_table(terminated->id);
+
+        running_tcb = NULL;
+    }
+#if defined(PSJF)
+	sched_psjf();
+#elif defined(MLFQ)
+	sched_mlfq();
+#elif defined(CFS)
+	sched_cfs();  
+#elif defined(RR)
+	sched_rr();
+#else
+	perror("No scheduling policy defined");
 #endif
 }
 

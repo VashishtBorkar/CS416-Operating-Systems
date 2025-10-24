@@ -4,7 +4,7 @@
 #define MAX_THREADS 128 // 64 on piazza
 
 
-typedef struct tcb tcb_t;
+typedef struct TCB tcb_t;
 
 // Queue
 typedef struct Node_t {

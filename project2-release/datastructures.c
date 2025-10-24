@@ -31,30 +31,6 @@ void enqueue(Queue_t *queue, tcb_t* data) {
 	queue->tail = node;
 }
 
-void enqueue(Queue_t *queue, tcb_t *data) {
-    if (!queue) {
-        fprintf(stderr, "enqueue: queue not initialized\n");
-        return;
-    }
-    
-    Node_t *node = malloc(sizeof(Node_t));
-    if (!node) {
-        fprintf(stderr, "enqueue: malloc failed\n");
-        return;
-    }
-    
-    node->data = data;
-    node->next = NULL;
-
-    if (queue->tail) {
-        queue->tail->next = node;
-    } else {
-        queue->head = node;
-    }
-
-    queue->tail = node;
-}
-
 tcb_t *dequeue(Queue_t *queue) {
     if (!queue) {
         fprintf(stderr, "dequeue: queue not initialized\n");
@@ -77,7 +53,7 @@ tcb_t *dequeue(Queue_t *queue) {
     return data;
 }
 
-int is_empty(Queue_t *queue) {
+int is_empty_queue(Queue_t *queue) {
     if (!queue) {
         return 1; // NULL queue is empty
     }
