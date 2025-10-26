@@ -87,24 +87,24 @@ void heap_insert(MinHeap_t *heap, tcb_t *thread) {
     heap->threads[i] = thread;
 
     while (i > 0) {
-        int parent = (i - 1) / 2;
+        int smallest = (i - 1) / 2;
 
         #if defined(CFS)
-            if (heap->threads[parent]->vruntime <= heap->threads[i]->vruntime) {
+            if (heap->threads[smallest]->vruntime <= heap->threads[i]->vruntime) {
                 break;
             }
             
         #elif defined(PSJF)
-            if (heap->threads[parent]->elapsed_quanta <= heap->threads[i]->elapsed_quanta){
+            if (heap->threads[smallest]->elapsed_quanta <= heap->threads[i]->elapsed_quanta){
                 break;
             }
         #endif
         
-        // Less than parent swap
+        // Less than smallest swap
         tcb_t *temp = heap->threads[i];
-        heap->threads[i] = heap->threads[parent];
-        heap->threads[parent] = temp;
-        i = parent;
+        heap->threads[i] = heap->threads[smallest];
+        heap->threads[smallest] = temp;
+        i = smallest;
     }
 }
 
@@ -127,33 +127,33 @@ tcb_t *heap_extract_min(MinHeap_t *heap) {
     while (1) {
         int left = 2 * i + 1;
         int right = 2 * i + 2;
-        int parent = i;
+        int smallest = i;
         
         #if defined(CFS)
-            if (left < heap->size && heap->threads[left]->vruntime < heap->threads[parent]->vruntime) {
-                parent = left;
+            if (left < heap->size && heap->threads[left]->vruntime < heap->threads[smallest]->vruntime) {
+                smallest = left;
             }
-            if (right < heap->size && heap->threads[right]->vruntime < heap->threads[parent]->vruntime) {
-                parent = right;
+            if (right < heap->size && heap->threads[right]->vruntime < heap->threads[smallest]->vruntime) {
+                smallest = right;
             }
         #elif defined(PSJF)
-            if (left < heap->size && heap->threads[left]->elapsed_quanta < heap->threads[parent]->elapsed_quanta) {
-                parent = left;
+            if (left < heap->size && heap->threads[left]->elapsed_quanta < heap->threads[smallest]->elapsed_quanta) {
+                smallest = left;
             }
-            if (right < heap->size && heap->threads[right]->elapsed_quanta < heap->threads[parent]->elapsed_quanta) {
-                parent = right;
+            if (right < heap->size && heap->threads[right]->elapsed_quanta < heap->threads[smallest]->elapsed_quanta) {
+                smallest = right;
             }
         #endif
 
 
-        if (parent == i) { // not smaller than children
+        if (smallest == i) { // not smaller than children
             break;
         }
 
         tcb_t *temp = heap->threads[i];
-        heap->threads[i] = heap->threads[parent];
-        heap->threads[parent] = temp;
-        i = parent;
+        heap->threads[i] = heap->threads[smallest];
+        heap->threads[smallest] = temp;
+        i = smallest;
     }
 
     return min;
