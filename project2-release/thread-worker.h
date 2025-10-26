@@ -53,10 +53,16 @@ typedef struct TCB {
 	void* retval;
 	enum thread_state state;
 
+	// stats
+	struct timespec arrival_time;
+	struct timespec start_time;
+	struct timespec finish_time;
+	int has_started;
+
 	// Scheduling
+	long elapsed_quanta;
 	int priority;
 	long vruntime;
-	long elapsed_quanta;
 	
 	// Synchronization
 	// worker_t waiting_for; // thread id this thread is waiting for
