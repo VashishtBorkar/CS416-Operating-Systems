@@ -5,13 +5,16 @@
 
 #include "thread-worker.h"
 #include "datastructures.h"
+#include <time.h>
 
 //Global counter for total context switches and 
 //average turn around and response time
 long tot_cntx_switches=0;
 double avg_turn_time=0;
 double avg_resp_time=0;
-
+long total_turnaround_time=0;
+long total_response_time=0;
+long completed_threads=0;
 
 // INITAILIZE ALL YOUR OTHER VARIABLES HERE
 static tcb_t *main_tcb = NULL; // main thread TCB
@@ -22,17 +25,18 @@ static tcb_t *running_tcb = NULL;
 static tcb_t* thread_table[MAX_THREADS];
 static int thread_count = 0;
 
-static Queue_t ready_queue;
+// Scheduler data structures
 static Queue_t rr_queue; 
+static MinHeap_t psjf_heap;
+// TODO: add MLFQ array
+static MinHeap_t cfs_heap;
 
 static void schedule();
+static void scheduler_loop();
 
 // Timer and signal handling
 static struct itimerval timer;
 static struct sigaction sa;
-
-// YOUR CODE HERE
-
 
 
 // Thread table functions
@@ -67,28 +71,78 @@ void remove_thread_from_table(worker_t id) {
     }
 }
 
-
-// Main thread set up
-void timer_handler(int signum) {
-    if (running_tcb) {
-        // save current and switch to scheduler
-		tcb_t* current = running_tcb;
-		current->state = READY;
-		
-		add_to_scheduler(current);
-
-		running_tcb = NULL;
-		
-        if(swapcontext(&current->context, &scheduler_context) == -1) {
-			perror("swapcontext in timer_handler");
-			exit(1);
+int has_blocked_threads() {
+	for (int i = 0; i < MAX_THREADS; i++) {
+		if (thread_table[i] != NULL && thread_table[i]->state == BLOCKED) {
+			return 1;
 		}
-    } 
+	}
+	return 0;
 }
 
+void cleanup_thread(tcb_t *thread) {
+	remove_thread_from_table(thread->id);
+	if (thread->stack) {
+		free(thread->stack);
+	}
+	free(thread);
+}
+
+
+// Timer functions
+void timer_handler(int signum) {
+	if (running_tcb) {
+		if(swapcontext(&running_tcb->context, &scheduler_context) == -1) {
+				perror("swapcontext in timer_handler");
+				exit(1);
+		}
+	}
+
+    // if (running_tcb) {
+    //     // save current and switch to scheduler
+	// 	tcb_t* current = running_tcb;
+	// 	current->state = READY;
+	// 	current->elapsed_quanta++;
+
+	// 	add_to_scheduler(current);
+
+	// 	running_tcb = NULL;
+		
+    //     if(swapcontext(&current->context, &scheduler_context) == -1) {
+	// 		perror("swapcontext in timer_handler");
+	// 		exit(1);
+	// 	}
+    // } 
+}
+
+void block_timer_signal() {
+    sigset_t set;
+    sigemptyset(&set);
+    sigaddset(&set, SIGPROF);
+    sigprocmask(SIG_BLOCK, &set, NULL);
+}
+
+void unblock_timer_signal() {
+    sigset_t set;
+    sigemptyset(&set);
+    sigaddset(&set, SIGPROF);
+    sigprocmask(SIG_UNBLOCK, &set, NULL);
+}
+
+long time_diff_microseconds (struct timespec start, struct timespec end) {
+	return (end.tv_sec - start.tv_sec) * 1000000L + (end.tv_nsec - start.tv_nsec) / 1000L;
+}
+
+
+// Main thread set up
 void init_timer() {
+	memset(&timer, 0, sizeof(timer));
     memset(&sa, 0, sizeof(sa));
+
     sa.sa_handler = &timer_handler;
+	sa.sa_flags = SA_RESTART;
+	sigemptyset(&sa.sa_mask);
+	
     sigaction(SIGPROF, &sa, NULL);
 
     timer.it_interval.tv_sec = 0;
@@ -109,8 +163,12 @@ void init_scheduler() {
 		return; // already initialized
 	}
 	scheduler_initialized = 1;
+	
+	// initialize data structures
+	init_queue(&rr_queue);
+	init_heap(&psjf_heap);
+	init_heap(&cfs_heap);
 
-	init_queue(&ready_queue);
 	if (getcontext(&scheduler_context) == -1) {
 		perror("getcontext for scheduler");
 		exit(1);
@@ -162,11 +220,14 @@ void init_main_thread() {
 	main_tcb->state = RUNNING;
 	main_tcb->stack = NULL; // main thread uses existing stack
 	main_tcb->retval = NULL;
+	main_tcb->has_started = 1;
 	// main_tcb->waiting_for = -1;
 
 	running_tcb = main_tcb;
 }
 
+
+// Worker thread functions
 static void worker_start(void *(*func)(void *), void *arg) {
 	/* Helper function for worker_create */
     void *ret = func(arg);  // run the user's function
@@ -198,6 +259,11 @@ int worker_create(worker_t * thread, pthread_attr_t * attr,
 	// Increment thread counter 
 	static int next_thread_id = 1;
 	new_tcb->id = next_thread_id++;
+	thread_count++;
+
+	// Set arrival time
+	clock_gettime(CLOCK_MONOTONIC, &new_tcb->arrival_time);
+	new_tcb->has_started = 0;
 
 	// Allocate stack
 	new_tcb->stack = malloc(SIGSTKSZ);
@@ -222,19 +288,12 @@ int worker_create(worker_t * thread, pthread_attr_t * attr,
 
 	makecontext(&new_tcb->context, (void (*)(void))worker_start, 2, function, arg);
 
-	// TCB Fields 
+	// TCB Fields
 	new_tcb->state = READY;
     new_tcb->retval = NULL;
-    // new_tcb->waiting_for = -1;
 	new_tcb->joined = 0;
 
-	if (add_thread_to_table(new_tcb) == -1) {
-        fprintf(stderr, "worker_create: failed to add thread to table\n");
-        free(new_tcb->context.uc_stack.ss_sp);
-        free(new_tcb);
-        return -1;
-    }
-
+	add_thread_to_table(new_tcb);
 	add_to_scheduler(new_tcb);
 
 	*thread = new_tcb->id;
@@ -256,9 +315,9 @@ int worker_yield() {
 		return -1;
 	}
 
+	current->elapsed_quanta++;
 	current->state = READY;
-
-	add_to_scheduler(current);
+	// add_to_scheduler(current);
 
 	if(swapcontext(&current->context, &scheduler_context) == -1) {
 		perror("swapcontext to scheduler");
@@ -273,32 +332,48 @@ void worker_exit(void *value_ptr) {
 	// - de-allocate any dynamic memory created when starting this thread
 	// YOUR CODE HERE
 
-	tcb_t *current = running_tcb;
-	if (!current) {
+	if (!running_tcb) {
 		perror("No running thread");
 		exit(1);
 	}
 
-	current->state = TERMINATED;
-	current->retval = value_ptr;
-	// if (current->stack) {
-	// 	free(current->stack);
-	// 	current->stack = NULL;
+	// dont exit main thread if there are still threads
+	// if (current == main_tcb) {
+	// 	while (thread_count > 1 || has_blocked_threads()) {
+    //         swapcontext(&main_tcb->context, &scheduler_context);
+    //     }
+		
+	// 	return;
 	// }
 
-	if (current->waiting_thread != NULL) {
-		tcb_t *waiting = current->waiting_thread;
+	running_tcb->state = TERMINATED;
+	running_tcb->retval = value_ptr;
+
+	// Calculate stats
+	clock_gettime(CLOCK_MONOTONIC, &running_tcb->finish_time);
+	long turnaround_time = time_diff_microseconds(running_tcb->arrival_time, running_tcb->finish_time);
+	long response_time = time_diff_microseconds(running_tcb->arrival_time, running_tcb->start_time);
+
+	thread_count--;
+	completed_threads++;
+
+	total_turnaround_time += turnaround_time;
+	total_response_time += response_time;
+
+	avg_turn_time = (double) total_turnaround_time / completed_threads;
+	avg_resp_time = (double) total_response_time / completed_threads;
+
+	// wake up waiting thread
+	if (running_tcb->waiting_thread != NULL) {
+		tcb_t *waiting = running_tcb->waiting_thread;
 		waiting->state = READY;
-		add_to_scheduler(current->waiting_thread);
-		current->waiting_thread = NULL;
+		add_to_scheduler(running_tcb->waiting_thread);
+		running_tcb->waiting_thread = NULL;
 	}
 
-	running_tcb = NULL;
-
-	if (swapcontext(&current->context, &scheduler_context) == -1) {
-        perror("worker_exit: swapcontext");
-        exit(1);
-    }
+	// setcontext(&scheduler_context);
+	swapcontext(&running_tcb->context, &scheduler_context);
+	// setcontext(&scheduler_context);
 }
 
 /* Wait for thread termination */
@@ -309,8 +384,14 @@ int worker_join(worker_t thread, void **value_ptr) {
   
 	// YOUR CODE HERE
 	tcb_t *target = find_tcb_by_id(thread);
+	
 	if (!target) {
 		fprintf(stderr, "worker_join: no such thread %u\n", thread);
+		return -1;
+	}
+
+	if (running_tcb->id == thread) {
+		fprintf(stderr, "worker_join: thread cannot join itself\n");
 		return -1;
 	}
 
@@ -320,34 +401,34 @@ int worker_join(worker_t thread, void **value_ptr) {
         return -1;
     }
 
-	// If already terminated, clean up and return
-	if (target->state == TERMINATED) {
-		if (value_ptr) {
-			*value_ptr = target->retval;
-		}
-		free(target);
+	// If already terminated return
+	if (target->state == TERMINATED && value_ptr) {
+		*value_ptr = target->retval;
+		target->joined = 1;
+		cleanup_thread(target);
 		return 0;
 	}
 
 	// Otherwise block current and join
 	target->joined = 1;
 
-	tcb_t *current = running_tcb;
-	current->state = BLOCKED;
-	target->waiting_thread = current;
+	running_tcb->state = BLOCKED;
+	target->waiting_thread = running_tcb;
 
-	swapcontext(&current->context, &scheduler_context);
+	swapcontext(&running_tcb->context, &scheduler_context);
+	// setcontext(&scheduler_context);
 
 	if (value_ptr) {
         *value_ptr = target->retval;
-	}
+    }
 
-	free(target->stack);
-	free(target);
-	
+	cleanup_thread(target);
+
 	return 0;
-};
+}
 
+
+// Mutex functions
 /* initialize the mutex lock */
 int worker_mutex_init(worker_mutex_t *mutex, 
                           const pthread_mutexattr_t *mutexattr) {
@@ -371,33 +452,27 @@ int worker_mutex_lock(worker_mutex_t *mutex) {
         // - if acquiring mutex fails, push current thread into block list and
         // context switch to the scheduler thread
 
-        // YOUR CODE HERE
-		if (!mutex) {
-			fprintf(stderr, "worker_mutex_lock: mutex is NULL\n");
-			return -1;
+	// YOUR CODE HERE
+	if (!mutex) {
+		fprintf(stderr, "worker_mutex_lock: mutex is NULL\n");
+		return -1;
+	}
+
+	while (atomic_flag_test_and_set(&mutex->locked)) {
+		if (running_tcb->state != BLOCKED) {
+			running_tcb->state = BLOCKED;
+			enqueue(&mutex->wait_queue, running_tcb);
 		}
-
-		if(!atomic_flag_test_and_set(&mutex->locked)) {
-			mutex->owner_tcb = running_tcb;
-			return 0;
-		} 
-
-		// block thread if mutx is locked
-		running_tcb->state = BLOCKED;
-		enqueue(&mutex->wait_queue, running_tcb);
 		
-		// switch to scheduler
-		tcb_t *current = running_tcb;
-		running_tcb = NULL;
-
-		if(swapcontext(&current->context, &scheduler_context) == -1) {
+		if (swapcontext(&running_tcb->context, &scheduler_context) == -1) {
 			perror("swapcontext to scheduler");
 			return -1;
 		}
-		
-		// acquired the lock		
-		mutex->owner_tcb = running_tcb;
-    	return 0;
+	}
+	
+	// acquired the lock		
+	mutex->owner_tcb = running_tcb;
+	return 0;
 };
 
 /* release the mutex lock */
@@ -418,19 +493,17 @@ int worker_mutex_unlock(worker_mutex_t *mutex) {
 	}
 	
 	mutex->owner_tcb = NULL;
-
-	if (!is_empty_queue(&mutex->wait_queue)) {
-		// No waiting threads
-		tcb_t *woken_thread = dequeue(&mutex->wait_queue);
-        woken_thread->state = READY;
-        add_to_scheduler(woken_thread);
-	} 
-	
 	atomic_flag_clear(&mutex->locked);
 
+	// Wake up waiting thread
+	if (!is_empty_queue(&mutex->wait_queue)) {
+		tcb_t *wait_thread = dequeue(&mutex->wait_queue);
+        wait_thread->state = READY;
+        add_to_scheduler(wait_thread);
+	} 
+	
 	return 0;
-};
-
+}
 
 /* destroy the mutex */
 int worker_mutex_destroy(worker_mutex_t *mutex) {
@@ -455,14 +528,44 @@ int worker_mutex_destroy(worker_mutex_t *mutex) {
 	return 0;
 };
 
+
+// Scheduling functions
 /* Pre-emptive Shortest Job First (POLICY_PSJF) scheduling algorithm */
 static void sched_psjf() {
 	// - your own implementation of PSJF
 	// (feel free to modify arguments and return types)
 
 	// YOUR CODE HERE
-}
+	tcb_t* next = heap_extract_min(&psjf_heap);
+	
 
+	if (next) {
+		next->state = RUNNING;
+		running_tcb = next;
+
+		// Set start time if this is first time on cpu
+		if (!next->has_started) {
+			clock_gettime(CLOCK_MONOTONIC, &next->start_time);
+			next->has_started = 1;
+		}
+		tot_cntx_switches++;
+		unblock_timer_signal();
+		setcontext(&running_tcb->context);
+	} else {
+		// check if any threads blocked
+		if(has_blocked_threads()) {
+			return;
+		}
+		
+		// No threads ready
+		printf("No ready threads. Returning to main thread.\n");
+		//tot_cntx_switches++;
+		block_timer_signal();
+		setcontext(&main_tcb->context);
+		return;
+	}
+
+}
 
 /* Preemptive MLFQ scheduling algorithm */
 static void sched_mlfq() {
@@ -497,24 +600,51 @@ static void sched_cfs(){
 	// Step6: Run the selected thread
 }
 
+/* Round robin scheduling algorithm */
 static void sched_rr() {
-	// Simple Round Robin Scheduling
-	tcb_t *next = dequeue(&rr_queue);
-	if (next) {
-		next->state = RUNNING;
-		running_tcb = next;
-		setcontext(&running_tcb->context);
-	} else {
-		printf("No ready threads. Returning to main thread.\n");
-		setcontext(&main_tcb->context);
-		return;
-	}
+	while (1) {
+		
+		tcb_t *next = dequeue(&rr_queue);
+		if (next) {
+			next->state = RUNNING;
+			running_tcb = next;
+
+			// Set start time if this is first time on cpu
+			if (!next->has_started) {
+				clock_gettime(CLOCK_MONOTONIC, &next->start_time);
+				next->has_started = 1;
+			}
+			unblock_timer_signal();
+			// swapcontext(&scheduler_context, &running_tcb->context);
+			setcontext(&running_tcb->context);
+		}
+
+        if (thread_count <= 1) {
+            printf("All worker threads finished. Returning to main thread.\n");
+            unblock_timer_signal();
+            setcontext(&main_tcb->context);
+            return;
+        }
+
+		if (has_blocked_threads()) {
+			// printf("has blocked threads \n");
+			continue;
+		} else {
+			break;
+		}
+	} 
+		
+	printf("No ready threads. Returning to main thread.\n");
+	unblock_timer_signal();
+	setcontext(&main_tcb->context);
+	return;
 }
 
 // Scheduler helpers
 void add_to_scheduler(tcb_t* thread) {
 #if defined(PSJF)
 	// add to PSJF heap
+	heap_insert(&psjf_heap, thread);
 #elif defined(MLFQ)
 	// add to MLFQ queues
 #elif defined(CFS)
@@ -535,33 +665,47 @@ static void schedule() {
 	//YOUR CODE HERE
 	
 	// - invoke scheduling algorithms according to the policy (PSJF or MLFQ or CFS)
+	block_timer_signal();
 
-	if (running_tcb && running_tcb->state == TERMINATED) {
-        tcb_t *terminated = running_tcb;
+	if (running_tcb != NULL) {
+		switch (running_tcb->state) {
+			case RUNNING: // preemted thread
+				running_tcb->state = READY;
+				add_to_scheduler(running_tcb);
+				break;
+ 
+			case READY: // yielded thread
+				add_to_scheduler(running_tcb);
+				break;
 
-        // Free stack safely (scheduler isn’t using it)
-        if (terminated->stack) {
-            free(terminated->stack);
-            terminated->stack = NULL;
-        }
+			case BLOCKED: 
+				break;
 
-        remove_thread_from_table(terminated->id);
+			case TERMINATED:
+				running_tcb = NULL; // set freed pointer to NULL
+				break;
+				
+				
+			default:
+				break;
 
-        running_tcb = NULL;
-    }
+		}
+	}
+	
+	tot_cntx_switches++;
+
 #if defined(PSJF)
 	sched_psjf();
 #elif defined(MLFQ)
 	sched_mlfq();
 #elif defined(CFS)
-	sched_cfs();  
+	sched_cfs();
 #elif defined(RR)
 	sched_rr();
 #else
 	perror("No scheduling policy defined");
 #endif
 }
-
 
 
 //DO NOT MODIFY THIS FUNCTION
