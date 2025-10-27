@@ -28,15 +28,16 @@ static int thread_count = 0;
 // Scheduler data structures
 static Queue_t rr_queue; 
 static MinHeap_t psjf_heap;
-// TODO: add MLFQ array
+Queue_t mlfq_levels[MAX_MLFQ_LEVELS];
 static MinHeap_t cfs_heap;
 
+// Forward declaration
 static void schedule();
-static void scheduler_loop();
 
 // Timer and signal handling
 static struct itimerval timer;
 static struct sigaction sa;
+static int global_ticks = 0;
 
 
 // Thread table functions
@@ -92,27 +93,12 @@ void cleanup_thread(tcb_t *thread) {
 // Timer functions
 void timer_handler(int signum) {
 	if (running_tcb) {
+		//printf("Switching to scheduler\n");
 		if(swapcontext(&running_tcb->context, &scheduler_context) == -1) {
 				perror("swapcontext in timer_handler");
 				exit(1);
 		}
 	}
-
-    // if (running_tcb) {
-    //     // save current and switch to scheduler
-	// 	tcb_t* current = running_tcb;
-	// 	current->state = READY;
-	// 	current->elapsed_quanta++;
-
-	// 	add_to_scheduler(current);
-
-	// 	running_tcb = NULL;
-		
-    //     if(swapcontext(&current->context, &scheduler_context) == -1) {
-	// 		perror("swapcontext in timer_handler");
-	// 		exit(1);
-	// 	}
-    // } 
 }
 
 void block_timer_signal() {
@@ -134,6 +120,22 @@ long time_diff_microseconds (struct timespec start, struct timespec end) {
 }
 
 
+// Heap comparators
+int psjf_cmp(tcb_t *a, tcb_t *b) {
+    if (a->elapsed_quanta != b->elapsed_quanta) {
+        return a->elapsed_quanta - b->elapsed_quanta;
+	}
+    return a->id - b->id; // use id for tiebreaker
+}
+
+int cfs_cmp(tcb_t *a, tcb_t *b) {
+    if (a->vruntime != b->vruntime) {
+        return a->vruntime - b->vruntime;
+	}
+    return a->id - b->id; // use id for tiebreaker
+}
+
+
 // Main thread set up
 void init_timer() {
 	memset(&timer, 0, sizeof(timer));
@@ -146,10 +148,10 @@ void init_timer() {
     sigaction(SIGPROF, &sa, NULL);
 
     timer.it_interval.tv_sec = 0;
-    timer.it_interval.tv_usec = QUANTUM; // how often it repeats
+    timer.it_interval.tv_usec = QUANTUM * 1000; // how often it repeats in micro seconds
 
     timer.it_value.tv_sec = 0;
-    timer.it_value.tv_usec = QUANTUM;    // initial delay before first fire
+    timer.it_value.tv_usec = QUANTUM * 1000;    // initial delay before first fire in micro seconds
 
     if (setitimer(ITIMER_PROF, &timer, NULL) == -1) {
         perror("setitimer");
@@ -166,8 +168,11 @@ void init_scheduler() {
 	
 	// initialize data structures
 	init_queue(&rr_queue);
-	init_heap(&psjf_heap);
-	init_heap(&cfs_heap);
+	init_heap(&psjf_heap, psjf_cmp);
+	init_heap(&cfs_heap, cfs_cmp);
+	for (int i = 0; i < MAX_MLFQ_LEVELS; i++) {
+		init_queue(&mlfq_levels[i]);
+	}
 
 	if (getcontext(&scheduler_context) == -1) {
 		perror("getcontext for scheduler");
@@ -293,13 +298,20 @@ int worker_create(worker_t * thread, pthread_attr_t * attr,
     new_tcb->retval = NULL;
 	new_tcb->joined = 0;
 
+	// Scheduling fields
+	new_tcb->elapsed_quanta = 0;
+	new_tcb->priority = 0;
+	new_tcb->time_slice = 1;
+	new_tcb->time_used = 0;
+	new_tcb->vruntime = 0;
+
 	add_thread_to_table(new_tcb);
 	add_to_scheduler(new_tcb);
 
 	*thread = new_tcb->id;
 
     return 0;
-};
+}
 
 /* give CPU possession to other user-level worker threads voluntarily */
 int worker_yield() {
@@ -315,9 +327,7 @@ int worker_yield() {
 		return -1;
 	}
 
-	current->elapsed_quanta++;
 	current->state = READY;
-	// add_to_scheduler(current);
 
 	if(swapcontext(&current->context, &scheduler_context) == -1) {
 		perror("swapcontext to scheduler");
@@ -400,13 +410,20 @@ int worker_join(worker_t thread, void **value_ptr) {
         fprintf(stderr, "worker_join: thread already joined\n");
         return -1;
     }
+	
+	target->joined = 1;
 
 	// If already terminated return
-	if (target->state == TERMINATED && value_ptr) {
-		*value_ptr = target->retval;
-		target->joined = 1;
+	if (target->state == TERMINATED) {
+		printf("The thread you are trying to join is already terminated\n");
+		if (value_ptr) {
+			*value_ptr = target->retval;
+		}
+
 		cleanup_thread(target);
 		return 0;
+		// add_to_scheduler(running_tcb);
+		// set_context(&scheduler_context);
 	}
 
 	// Otherwise block current and join
@@ -416,7 +433,6 @@ int worker_join(worker_t thread, void **value_ptr) {
 	target->waiting_thread = running_tcb;
 
 	swapcontext(&running_tcb->context, &scheduler_context);
-	// setcontext(&scheduler_context);
 
 	if (value_ptr) {
         *value_ptr = target->retval;
@@ -536,37 +552,56 @@ static void sched_psjf() {
 	// (feel free to modify arguments and return types)
 
 	// YOUR CODE HERE
-	tcb_t* next = heap_extract_min(&psjf_heap);
-	
+	while (1) {
+		// print_heap(&psjf_heap);
+		tcb_t* next = heap_pop(&psjf_heap);
 
-	if (next) {
-		next->state = RUNNING;
-		running_tcb = next;
+		if (next) {
+			next->state = RUNNING;
 
-		// Set start time if this is first time on cpu
-		if (!next->has_started) {
-			clock_gettime(CLOCK_MONOTONIC, &next->start_time);
-			next->has_started = 1;
+			// Set start time if this is first time on cpu
+			if (!next->has_started) {
+				clock_gettime(CLOCK_MONOTONIC, &next->start_time);
+				next->has_started = 1;
+			}
+			
+			if (next->elapsed_quanta % 100 == 0) {
+				printf("Thread %d - Total Elapsed Quanta: %d \n", next->id, next->elapsed_quanta);
+			}
+			
+			running_tcb = next;
+			tot_cntx_switches++;
+			unblock_timer_signal();
+			setcontext(&running_tcb->context);
 		}
-		tot_cntx_switches++;
-		unblock_timer_signal();
-		setcontext(&running_tcb->context);
-	} else {
-		// check if any threads blocked
-		if(has_blocked_threads()) {
+
+		if (thread_count <= 1) {
+			unblock_timer_signal();
+			setcontext(&main_tcb->context);
 			return;
 		}
-		
-		// No threads ready
-		printf("No ready threads. Returning to main thread.\n");
-		//tot_cntx_switches++;
-		block_timer_signal();
-		setcontext(&main_tcb->context);
-		return;
-	}
 
+		if (!has_blocked_threads()) {
+			break;
+		}
+	}
+		
+	// No threads ready
+	printf("Threads finished going back to main\n");
+	//tot_cntx_switches++;
+	block_timer_signal();
+	setcontext(&main_tcb->context);
+	return;
 }
 
+void promote_all_threads() {
+	for (int i = 1; i < MAX_MLFQ_LEVELS; i++) {
+		while (!is_empty_queue(&mlfq_levels[i])) {
+			tcb_t* t = dequeue(&mlfq_levels[i]);
+			enqueue(&mlfq_levels[i], t);
+		}
+	}
+}
 /* Preemptive MLFQ scheduling algorithm */
 static void sched_mlfq() {
 	// - your own implementation of MLFQ
@@ -580,6 +615,51 @@ static void sched_mlfq() {
 	// Step2.2: Otherwise, push the thread back to its origin queue
 	// Step3: If time period S passes, promote all threads to the topmost queue (Rule 5)
 	// Step4: Apply RR on the topmost queue with entries and run next thread
+
+	while (1) {
+		// print_heap(&psjf_heap);
+		tcb_t* next = NULL;
+		
+		// Find next thread 
+		for (int i = 0; i < MAX_MLFQ_LEVELS; i++) {
+		if (!is_empty_queue(&mlfq_levels[i])) {
+			next = dequeue(&mlfq_levels[i]);
+			break;
+			}
+		}
+
+		if (next) {
+			next->state = RUNNING;
+
+			// Set start time if this is first time on cpu
+			if (!next->has_started) {
+				clock_gettime(CLOCK_MONOTONIC, &next->start_time);
+				next->has_started = 1;
+			}
+			
+			running_tcb = next;
+			tot_cntx_switches++;
+			unblock_timer_signal();
+			setcontext(&running_tcb->context);
+		}
+
+		if (thread_count <= 1) {
+			unblock_timer_signal();
+			setcontext(&main_tcb->context);
+			return;
+		}
+
+		if (!has_blocked_threads()) {
+			break;
+		}
+	}
+		
+	// No threads ready
+	printf("Threads finished going back to main\n");
+	block_timer_signal();
+	setcontext(&main_tcb->context);
+	return;
+
 }
 
 /* Completely fair scheduling algorithm */
@@ -603,7 +683,6 @@ static void sched_cfs(){
 /* Round robin scheduling algorithm */
 static void sched_rr() {
 	while (1) {
-		
 		tcb_t *next = dequeue(&rr_queue);
 		if (next) {
 			next->state = RUNNING;
@@ -620,21 +699,21 @@ static void sched_rr() {
 		}
 
         if (thread_count <= 1) {
-            printf("All worker threads finished. Returning to main thread.\n");
+            printf("Thread count <= 1. Returning to main.\n");
             unblock_timer_signal();
             setcontext(&main_tcb->context);
             return;
         }
 
 		if (has_blocked_threads()) {
-			// printf("has blocked threads \n");
-			continue;
-		} else {
+			printf("No ready threads and no blocked threads. Returning to main");
 			break;
 		}
+		
+		printf("Waiting on blocked threads \n");
 	} 
 		
-	printf("No ready threads. Returning to main thread.\n");
+	printf("Threads finished going back to main\n");
 	unblock_timer_signal();
 	setcontext(&main_tcb->context);
 	return;
@@ -644,9 +723,9 @@ static void sched_rr() {
 void add_to_scheduler(tcb_t* thread) {
 #if defined(PSJF)
 	// add to PSJF heap
-	heap_insert(&psjf_heap, thread);
+	heap_push(&psjf_heap, thread);
 #elif defined(MLFQ)
-	// add to MLFQ queues
+	enqueue(&mlfq_levels[thread->priority], thread);
 #elif defined(CFS)
 	// add to cfs heap
 #elif defined(RR)
@@ -654,6 +733,8 @@ void add_to_scheduler(tcb_t* thread) {
 #else
 	perror("No scheduling policy defined");
 #endif
+
+
 }
 
 /* scheduler */
@@ -666,15 +747,37 @@ static void schedule() {
 	
 	// - invoke scheduling algorithms according to the policy (PSJF or MLFQ or CFS)
 	block_timer_signal();
-
+	global_ticks++;
 	if (running_tcb != NULL) {
 		switch (running_tcb->state) {
 			case RUNNING: // preemted thread
 				running_tcb->state = READY;
+#if defined(PSJF)
+                running_tcb->elapsed_quanta++;
+#elif defined(MLFQ)
+				// handle promoting all threads to top level
+				if (global_ticks % S_PERIOD == 0) {
+					promote_all_threads();
+				}
+				
+                running_tcb->time_used++;
+                if (running_tcb->time_used >= running_tcb->time_slice &&
+					running_tcb->priority < MAX_MLFQ_LEVELS - 1) {
+                    // Demote thread to lower priority
+                    running_tcb->priority++;
+					running_tcb->time_slice = 1 << running_tcb->priority;
+                }
+				running_tcb->time_used = 0; // reset allotment
+#elif defined(CFS)
+                // update_vruntime(running_tcb);
+#elif defined(RR)
+                running_tcb->elapsed_quanta++;
+#endif
 				add_to_scheduler(running_tcb);
 				break;
  
 			case READY: // yielded thread
+				running_tcb->time_used = 0; // reset allotment
 				add_to_scheduler(running_tcb);
 				break;
 

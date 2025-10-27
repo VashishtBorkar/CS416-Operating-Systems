@@ -21,6 +21,9 @@
 /* Time slice quantum in milliseconds */
 #define QUANTUM 10
 
+#define MAX_MLFQ_LEVELS 4
+#define S_PERIOD 100
+
 #define MAX_THREADS 128 // 64 on piazza
 
 /* include lib header files that you need here: */
@@ -33,6 +36,7 @@
 #include <signal.h>
 #include <sys/time.h>
 #include <stdatomic.h>
+#include <time.h>
 
 #include "datastructures.h"
 
@@ -61,7 +65,9 @@ typedef struct TCB {
 
 	// Scheduling
 	long elapsed_quanta;
-	int priority;
+	int priority; // MLFQ level
+	int time_slice;
+	int time_used;
 	long vruntime;
 	
 	// Synchronization
