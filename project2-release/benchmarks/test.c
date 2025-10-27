@@ -70,12 +70,12 @@ void test_mutex() {
     printf("Final counter value: %d\n\n", counter);
 }
 
-void* rr_thread_func(void* arg) {
+void* sched_thread_func(void* arg) {
     int id = *(int*)arg;
     printf("Thread %d running.\n", id);
     for (int i = 0; i < 5; i++) {
         for (int i = 0; i < 10; i++) {
-            for (int j = 0; j < 1000000; j++) {
+            for (int j = 0; j < 10000000; j++) {
                 // waiting
             }
         }
@@ -85,30 +85,119 @@ void* rr_thread_func(void* arg) {
     return NULL;
 }
 
-void test_rr() {
-    printf("Testing Round Robin Scheduling:\n");
+void simple_schedule_test() {
+    printf("Testing Scheduling Policy:\n");
     worker_t threads[NUM_THREADS];
     int ids[NUM_THREADS];
 
     for (int i = 0; i < NUM_THREADS; i++) {
         ids[i] = i + 1;
-        worker_create(&threads[i], NULL, rr_thread_func, &ids[i]);
+        worker_create(&threads[i], NULL, sched_thread_func, &ids[i]);
     }
 
     for (int i = 0; i < NUM_THREADS; i++) {
         worker_join(threads[i], NULL);
     }
 
-    printf("All RR threads finished!\n");
+    printf("All threads finished!\n");
     return 0;
 }
+/*
+
+void test_heap_sched(int num_threads) {
+    MinHeap_t heap;
+    init_heap(&heap);
+
+    // Create some mock TCBs
+
+    tcb_t* threads[num_threads];
+    for (int i = 0; i < num_threads; i++) {
+        threads[i] = malloc(sizeof(tcb_t));
+        threads[i]->id = i+1;
+        threads[i]->elapsed_quanta = 0;
+        heap_push(&heap, threads[i]);
+    } 
+
+    printf("Initial Heap: \n");
+    print_heap(&heap);
+
+    for (int i = 0; i < num_threads * 2; i++) {
+        printf("Removing Min...\n");
+        tcb_t* min = heap_pop(&heap);
+        printf("MIN: T%d(q=%d)\n", min->id, min->elapsed_quanta);
+
+        printf("Incrementing min and adding back to heap\n");
+        min->elapsed_quanta++;
+        heap_push(&heap, min);
+        print_heap(&heap);
+    }
+
+    printf("Heap test completed\n\n");
+}
+
+void insert_max_test(int num_threads) {
+    MinHeap_t heap;
+    init_heap(&heap);
+
+    // Create some mock TCBs
+
+    tcb_t* threads[num_threads];
+    for (int i = 0; i < num_threads; i++) {
+        threads[i] = malloc(sizeof(tcb_t));
+        threads[i]->id = i+1;
+        threads[i]->elapsed_quanta = 0;
+        heap_push(&heap, threads[i]);
+    } 
+
+    printf("Initial Heap: \n");
+    print_heap(&heap);
+    
+    printf("Inserting big thread\n");
+    tcb_t* big_thread = malloc(sizeof(tcb_t));
+    big_thread->id = 10;
+    big_thread->elapsed_quanta = 1;
+    heap_push(&heap, big_thread);
+
+    printf("Heap after insert: \n");
+    print_heap(&heap);
+   
+    printf("Heap test completed\n\n");
+}
+
+void test_heap_basic(int num_threads) {
+    MinHeap_t heap;
+    init_heap(&heap);
+
+    // Create some mock TCBs
+
+    tcb_t* threads[num_threads];
+    for (int i = 0; i < num_threads; i++) {
+        threads[i] = malloc(sizeof(tcb_t));
+        threads[i]->id = i;
+        threads[i]->elapsed_quanta = (num_threads-i-1) * 10;
+        heap_push(&heap, threads[i]);
+    }
+
+    printf("Initial Heap: \n");
+    print_heap(&heap);
+
+    for (int i = 0; i < num_threads; i++) {
+        printf("Removing Min...\n");
+        tcb_t* min = heap_pop(&heap);
+        printf("MIN: T%d(q=%d)\n", min->id, min->elapsed_quanta);
+        free(min);
+    }
+
+    printf("Heap test completed\n\n");
+}
+*/
+
 
 int main(int argc, char **argv) {
 
 	/* Implement HERE */
-	test_threads();
-	test_mutex();
-    test_rr();
+    simple_schedule_test();
+    print_app_stats();
 
 	return 0;
 }
