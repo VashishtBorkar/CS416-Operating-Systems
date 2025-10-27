@@ -71,6 +71,7 @@ typedef struct TCB {
 	long vruntime;
 	struct timespec last_start;
 	int cfs_timeslice;
+	int cfs_time_used;
 	
 	// Synchronization
 	// worker_t waiting_for; // thread id this thread is waiting for

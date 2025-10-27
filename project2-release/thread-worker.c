@@ -102,6 +102,7 @@ void timer_handler(int signum) {
 }
 
 void set_timer(long time_slice) {
+	// should be micro seconds
     timer.it_interval.tv_sec = 0;
     timer.it_interval.tv_usec = time_slice;
     timer.it_value.tv_sec = 0;
@@ -393,9 +394,7 @@ void worker_exit(void *value_ptr) {
 		running_tcb->waiting_thread = NULL;
 	}
 
-	// setcontext(&scheduler_context);
 	swapcontext(&running_tcb->context, &scheduler_context);
-	// setcontext(&scheduler_context);
 }
 
 /* Wait for thread termination */
@@ -427,7 +426,7 @@ int worker_join(worker_t thread, void **value_ptr) {
 
 	// If already terminated return
 	if (target->state == TERMINATED) {
-		printf("The thread you are trying to join is already terminated\n");
+		// printf("The thread you are trying to join is already terminated\n");
 		if (value_ptr) {
 			*value_ptr = target->retval;
 		}
@@ -597,7 +596,7 @@ static void sched_psjf() {
 		
 	// No threads ready
 	print_app_stats();
-	printf("Threads finished going back to main\n");
+	// printf("Threads finished going back to main\n");
 	block_timer_signal();
 	setcontext(&main_tcb->context);
 	return;
@@ -624,11 +623,34 @@ static void sched_mlfq() {
 	// Step2.2: Otherwise, push the thread back to its origin queue
 	// Step3: If time period S passes, promote all threads to the topmost queue (Rule 5)
 	// Step4: Apply RR on the topmost queue with entries and run next thread
+	if (running_tcb) {
+		if (running_tcb->state == RUNNING) {
+			if (running_tcb->time_used >= running_tcb->time_slice) {
+				if (running_tcb->priority < MAX_MLFQ_LEVELS - 1) {
+					// Demote thread to lower priority
+					running_tcb->priority++;
+				}
+				running_tcb->time_slice = 1 << running_tcb->priority;
+				running_tcb->time_used = 0; // reset allotment
+				running_tcb->state = READY;
+				add_to_scheduler(running_tcb);
+			} else {
+				unblock_timer_signal();
+				setcontext(&running_tcb->context);
+			}
+		} else if (running_tcb->state == READY) {
+			add_to_scheduler(running_tcb);
+		} else if (running_tcb->state == TERMINATED) {
+			running_tcb = NULL;
+		} else if (running_tcb->state == BLOCKED) {
+			// do nothing for blocked
+		}
+	} 
 
 	while (1) {
 		// print_heap(&psjf_heap);
 		tcb_t* next = NULL;
-		
+
 		// Find next thread 
 		for (int i = 0; i < MAX_MLFQ_LEVELS; i++) {
 		if (!is_empty_queue(&mlfq_levels[i])) {
@@ -653,6 +675,7 @@ static void sched_mlfq() {
 		}
 
 		if (thread_count <= 1) {
+			tot_cntx_switches++;
 			unblock_timer_signal();
 			setcontext(&main_tcb->context);
 			return;
@@ -664,8 +687,8 @@ static void sched_mlfq() {
 	}
 		
 	// No threads ready
-	print_app_stats();
-	printf("Threads finished going back to main\n");
+	// print_app_stats();
+	// printf("Threads finished going back to main\n");
 	block_timer_signal();
 	setcontext(&main_tcb->context);
 	return;
@@ -680,7 +703,7 @@ void update_vruntime(tcb_t *thread) {
 }
 
 long calculate_timeslice_cfs(tcb_t* thread) {
-	int num_threads = cfs_heap.size;
+	int num_threads = cfs_heap.size + 1;
 	if (num_threads <= 0) {
 		thread->cfs_timeslice = MIN_SCHED_GRN * 1000;
 		return thread->cfs_timeslice;
@@ -713,8 +736,9 @@ static void sched_cfs(){
 
 	while (1) {
 		// print_heap(&psjf_heap);
+		long time_slice = calculate_timeslice_cfs(running_tcb);
 		tcb_t* next = heap_pop(&cfs_heap);
-
+		
 		if (next) {
 			next->state = RUNNING;
 
@@ -727,7 +751,6 @@ static void sched_cfs(){
 			clock_gettime(CLOCK_MONOTONIC, &next->last_start);
 			
 			running_tcb = next;
-			long time_slice = calculate_timeslice_cfs(running_tcb);
 			set_timer(time_slice);
 			tot_cntx_switches++;
 			unblock_timer_signal();
@@ -747,7 +770,7 @@ static void sched_cfs(){
 		
 	// No threads ready
 	print_app_stats();
-	printf("Threads finished going back to main\n");
+	// printf("Threads finished going back to main\n");
 	block_timer_signal();
 	setcontext(&main_tcb->context);
 	return;
@@ -766,6 +789,7 @@ static void sched_rr() {
 				clock_gettime(CLOCK_MONOTONIC, &next->start_time);
 				next->has_started = 1;
 			}
+			
 			unblock_timer_signal();
 			// swapcontext(&scheduler_context, &running_tcb->context);
 			setcontext(&running_tcb->context);
@@ -773,22 +797,22 @@ static void sched_rr() {
 
         if (thread_count <= 1) {
 			break;
-            printf("Thread count <= 1. Returning to main.\n");
+            // printf("Thread count <= 1. Returning to main.\n");
             unblock_timer_signal();
             setcontext(&main_tcb->context);
             return;
         }
 
 		if (has_blocked_threads()) {
-			printf("No ready threads and no blocked threads. Returning to main");
+			// printf("No ready threads and no blocked threads. Returning to main");
 			break;
 		}
 		
-		printf("Waiting on blocked threads \n");
+		// printf("Waiting on blocked threads \n");
 	} 
 	
 	print_app_stats();
-	printf("Threads finished going back to main\n");
+	// printf("Threads finished going back to main\n");
 	unblock_timer_signal();
 	setcontext(&main_tcb->context);
 	return;
@@ -822,7 +846,6 @@ static void schedule() {
 	
 	// - invoke scheduling algorithms according to the policy (PSJF or MLFQ or CFS)
 	block_timer_signal();
-	global_ticks++;
 	if (running_tcb != NULL) {
 		switch (running_tcb->state) {
 			case RUNNING: // preemted thread
@@ -830,19 +853,14 @@ static void schedule() {
 #if defined(PSJF)
                 running_tcb->elapsed_quanta++;
 #elif defined(MLFQ)
+				global_ticks++;
+				running_tcb->time_used++;
+
 				// handle promoting all threads to top level
 				if (global_ticks % S_PERIOD == 0) {
 					promote_all_threads();
 				}
-				
-                running_tcb->time_used++;
-                if (running_tcb->time_used >= running_tcb->time_slice &&
-					running_tcb->priority < MAX_MLFQ_LEVELS - 1) {
-                    // Demote thread to lower priority
-                    running_tcb->priority++;
-					running_tcb->time_slice = 1 << running_tcb->priority;
-                }
-				running_tcb->time_used = 0; // reset allotment
+				break;
 #elif defined(CFS)
                 update_vruntime(running_tcb);
 #elif defined(RR)

@@ -13,7 +13,6 @@ datastructures.o: datastructures.c datastructures.h
 	$(CC) $(CFLAGS) datastructures.c
 
 thread-worker.o: thread-worker.h datastructures.h
-
 ifeq ($(SCHED), PSJF)
 	$(CC) -pthread $(CFLAGS) -DPSJF thread-worker.c
 else ifeq ($(SCHED), MLFQ)
@@ -23,7 +22,8 @@ else ifeq ($(SCHED), CFS)
 else ifeq ($(SCHED), RR)
 	$(CC) -pthread $(CFLAGS) -DRR thread-worker.c
 else
-	echo "no such scheduling algorithm."
+	echo "no such scheduling algorithm. using PSJF"
+	$(CC) -pthread $(CFLAGS) -DPSJF thread-worker.c
 endif
 
 clean:

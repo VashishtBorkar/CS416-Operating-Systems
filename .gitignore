@@ -1,7 +1,14 @@
 # Compiled object files
 *.o
 *.a
-/test
+
+/project2-release/benchmarks/record
+
+external_cal
+parallel_cal
+vector_multiply
+test
+
 
 # Compiled binary executables
 a.out
