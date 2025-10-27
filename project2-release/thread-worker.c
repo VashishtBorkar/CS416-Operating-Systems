@@ -101,6 +101,18 @@ void timer_handler(int signum) {
 	}
 }
 
+void set_timer(long time_slice) {
+    timer.it_interval.tv_sec = 0;
+    timer.it_interval.tv_usec = time_slice;
+    timer.it_value.tv_sec = 0;
+    timer.it_value.tv_usec = time_slice;
+
+    if (setitimer(ITIMER_PROF, &timer, NULL) == -1) {
+        perror("setitimer");
+        exit(1);
+    }
+}
+
 void block_timer_signal() {
     sigset_t set;
     sigemptyset(&set);
@@ -565,10 +577,6 @@ static void sched_psjf() {
 				next->has_started = 1;
 			}
 			
-			if (next->elapsed_quanta % 100 == 0) {
-				printf("Thread %d - Total Elapsed Quanta: %d \n", next->id, next->elapsed_quanta);
-			}
-			
 			running_tcb = next;
 			tot_cntx_switches++;
 			unblock_timer_signal();
@@ -576,6 +584,7 @@ static void sched_psjf() {
 		}
 
 		if (thread_count <= 1) {
+			break;
 			unblock_timer_signal();
 			setcontext(&main_tcb->context);
 			return;
@@ -587,8 +596,8 @@ static void sched_psjf() {
 	}
 		
 	// No threads ready
+	print_app_stats();
 	printf("Threads finished going back to main\n");
-	//tot_cntx_switches++;
 	block_timer_signal();
 	setcontext(&main_tcb->context);
 	return;
@@ -655,6 +664,7 @@ static void sched_mlfq() {
 	}
 		
 	// No threads ready
+	print_app_stats();
 	printf("Threads finished going back to main\n");
 	block_timer_signal();
 	setcontext(&main_tcb->context);
@@ -662,6 +672,28 @@ static void sched_mlfq() {
 
 }
 
+void update_vruntime(tcb_t *thread) {
+	struct timespec now;
+	clock_gettime(CLOCK_MONOTONIC, &now);
+	
+	thread->vruntime += time_diff_microseconds(thread->last_start, now);
+}
+
+long calculate_timeslice_cfs(tcb_t* thread) {
+	int num_threads = cfs_heap.size;
+	if (num_threads <= 0) {
+		thread->cfs_timeslice = MIN_SCHED_GRN * 1000;
+		return thread->cfs_timeslice;
+	}
+	long slice = TARGET_LATENCY * 1000 / num_threads;
+
+	if (slice < MIN_SCHED_GRN * 1000) {
+		slice = MIN_SCHED_GRN * 1000;
+	}
+
+	thread->cfs_timeslice = slice;
+	return slice;
+}
 /* Completely fair scheduling algorithm */
 static void sched_cfs(){
 	// - your own implementation of CFS
@@ -678,6 +710,47 @@ static void sched_cfs(){
 	// Step5: If the ideal time slice is smaller than minimum_granularity (MIN_SCHED_GRN), use MIN_SCHED_GRN instead
 	// Step5: Setup next time interrupt based on the time slice
 	// Step6: Run the selected thread
+
+	while (1) {
+		// print_heap(&psjf_heap);
+		tcb_t* next = heap_pop(&cfs_heap);
+
+		if (next) {
+			next->state = RUNNING;
+
+			// Set start time if this is first time on cpu
+			if (!next->has_started) {
+				clock_gettime(CLOCK_MONOTONIC, &next->start_time);
+				next->has_started = 1;
+			}
+
+			clock_gettime(CLOCK_MONOTONIC, &next->last_start);
+			
+			running_tcb = next;
+			long time_slice = calculate_timeslice_cfs(running_tcb);
+			set_timer(time_slice);
+			tot_cntx_switches++;
+			unblock_timer_signal();
+			setcontext(&running_tcb->context);
+		}
+
+		if (thread_count <= 1) {
+			unblock_timer_signal();
+			setcontext(&main_tcb->context);
+			return;
+		}
+
+		if (!has_blocked_threads()) {
+			break;
+		}
+	}
+		
+	// No threads ready
+	print_app_stats();
+	printf("Threads finished going back to main\n");
+	block_timer_signal();
+	setcontext(&main_tcb->context);
+	return;
 }
 
 /* Round robin scheduling algorithm */
@@ -699,6 +772,7 @@ static void sched_rr() {
 		}
 
         if (thread_count <= 1) {
+			break;
             printf("Thread count <= 1. Returning to main.\n");
             unblock_timer_signal();
             setcontext(&main_tcb->context);
@@ -712,7 +786,8 @@ static void sched_rr() {
 		
 		printf("Waiting on blocked threads \n");
 	} 
-		
+	
+	print_app_stats();
 	printf("Threads finished going back to main\n");
 	unblock_timer_signal();
 	setcontext(&main_tcb->context);
@@ -727,7 +802,7 @@ void add_to_scheduler(tcb_t* thread) {
 #elif defined(MLFQ)
 	enqueue(&mlfq_levels[thread->priority], thread);
 #elif defined(CFS)
-	// add to cfs heap
+	heap_push(&cfs_heap, thread);
 #elif defined(RR)
 	enqueue(&rr_queue, thread);
 #else
@@ -769,7 +844,7 @@ static void schedule() {
                 }
 				running_tcb->time_used = 0; // reset allotment
 #elif defined(CFS)
-                // update_vruntime(running_tcb);
+                update_vruntime(running_tcb);
 #elif defined(RR)
                 running_tcb->elapsed_quanta++;
 #endif
