@@ -1,5 +1,7 @@
 # Compiled object files
 *.o
+*.a
+/test
 
 # Compiled binary executables
 a.out
