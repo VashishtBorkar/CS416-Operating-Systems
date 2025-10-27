@@ -1,10 +1,11 @@
-#ifndef QUEUE_H
-#define QUEUE_H
+#ifndef DATASTRUCTURES_H
+#define DATASTRUCTURES_H
  
 #define MAX_THREADS 128 // 64 on piazza
 
 
 typedef struct TCB tcb_t;
+typedef int (*heap_cmp_t)(tcb_t *a, tcb_t *b);
 
 // Queue
 typedef struct Node_t {
@@ -27,11 +28,12 @@ int is_empty_queue(Queue_t *queue);
 typedef struct MinHeap_t {
     tcb_t *threads[MAX_THREADS];
     int size;
+    heap_cmp_t cmp;
 } MinHeap_t;
 
-void init_heap(MinHeap_t *heap);
-void heap_insert(MinHeap_t *heap, tcb_t *thread);
-tcb_t *heap_extract_min(MinHeap_t *heap);
+void init_heap(MinHeap_t *heap, heap_cmp_t cmp);
+void heap_push(MinHeap_t *heap, tcb_t *thread);
+tcb_t *heap_pop(MinHeap_t *heap);
 int is_empty_heap(MinHeap_t *heap);
 
 
