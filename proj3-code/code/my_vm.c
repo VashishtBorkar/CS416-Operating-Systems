@@ -1,10 +1,21 @@
 
 #include "my_vm.h"
 #include <string.h>   // optional for memcpy if you later implement put/get
+#include <pthread.h>
 
 // -----------------------------------------------------------------------------
 // Global Declarations (optional)
 // -----------------------------------------------------------------------------
+
+char* phys_mem = NULL; 
+
+pde_t *page_dir = NULL; 
+
+char *phys_bitmap = NULL;
+char *virt_bitmap = NULL;
+
+pthread_mutex_t vm_lock = PTHREAD_MUTEX_INITIALIZER;
+
 
 struct tlb tlb_store; // Placeholder for your TLB structure
 
@@ -27,6 +38,39 @@ static unsigned long long tlb_misses  = 0;
 void set_physical_mem(void) {
     // TODO: Implement memory allocation for simulated physical memory.
     // Use 32-bit values for sizes, page counts, and offsets.
+
+    if (phys_mem != NULL) {
+        return ; // already initialized
+    }
+
+    pthread_mutex_lock(&vm_lock);
+
+    phys_mem = malloc(MEMSIZE);
+    if (!phys_mem) {
+        fprintf(stderr, "Error allocating physical memory\n");
+        exit(1);
+    }
+
+    // 1 bit per page
+    int num_phys_pages = MEMSIZE / PGSIZE;
+    phys_bitmap = calloc(num_phys_pages / 8, 1); 
+
+    int num_virt_pages = MAX_MEMSIZE / PGSIZE;
+    virt_bitmap = calloc(num_virt_pages / 8, 1);
+
+    int num_entries = 1 << 10; // 1024
+    page_dir = calloc(num_entries, sizeof(pde_t));  
+    if (!page_dir) {
+        fprintf(stderr, "Error allocating page directory\n");
+        exit(1);
+    }
+
+    for (int i = 0; i < TLB_ENTRIES; i++) {
+        tlb_store.entries[i].valid = false;
+    }
+
+    pyhread_mutex_unlock(&vm_lock);
+
 }
 
 // -----------------------------------------------------------------------------
@@ -98,6 +142,27 @@ pte_t *translate(pde_t *pgdir, void *va)
     // TODO: Extract the 32-bit virtual address and compute indices
     // for the page directory, page table, and offset.
     // Return the corresponding PTE if found.
+
+    vaddr32_t va_u = VA2U(va);
+
+    // TODO: implement TLB lookup
+
+    uint32_t pd_index = PDX(va_u);
+    uint32_t pt_index = PTX(va_u);
+    uint32_t offset = OFF(va_u);
+
+    pde_t pde = pgdir[pd_index];
+    if (pde == 0) {
+        return NULL;
+    }
+
+    pte_t * page_table = (pte_t *)(uintptr_t)pde;
+    pte_t pte = page_table[pt_index];
+    if (pte != 0) {
+        //TODO: implement TLB update
+        return pte;
+    }
+
     return NULL; // Translation unsuccessful placeholder.
 }
 
