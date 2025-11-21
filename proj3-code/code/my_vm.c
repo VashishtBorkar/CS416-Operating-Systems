@@ -11,6 +11,9 @@ char* phys_mem = NULL;
 
 pde_t *page_dir = NULL; 
 
+int num_phys_pages = 0;
+int num_virt_pages = 0;
+
 char *phys_bitmap = NULL;
 char *virt_bitmap = NULL;
 
@@ -22,6 +25,34 @@ struct tlb tlb_store; // Placeholder for your TLB structure
 // Optional counters for TLB statistics
 static unsigned long long tlb_lookups = 0;
 static unsigned long long tlb_misses  = 0;
+
+// -----------------------------------------------------------------------------
+// Bit Functions
+// -----------------------------------------------------------------------------
+int get_bit(char * bitmap, int index) {
+    int byte_idx = index / 8;
+    int bit_idx = index % 8;
+    int mask = 1 << bit_idx;
+    int result = (bitmap[byte_idx] & mask) >> bit_idx;
+    return result;
+}
+
+void set_bit(char * bitmap, int index) {
+    int byte_idx = index/8;
+    int bit_idx = index%8;
+    int mask = 1 << bit_idx;
+    bitmap[byte_idx] = bitmap[byte_idx] | mask;
+    return;
+}
+
+void clear_bit(char * bitmap, int index) {
+    int byte_idx = index/8;
+    int bit_idx = index%8;
+    int mask = ~(1 << bit_idx);
+    bitmap[byte_idx] = bitmap[byte_idx] & mask;
+    return;
+}
+
 
 // -----------------------------------------------------------------------------
 // Setup
@@ -52,10 +83,10 @@ void set_physical_mem(void) {
     }
 
     // 1 bit per page
-    int num_phys_pages = MEMSIZE / PGSIZE;
-    phys_bitmap = calloc(num_phys_pages / 8, 1); 
-
-    int num_virt_pages = MAX_MEMSIZE / PGSIZE;
+    num_phys_pages = MEMSIZE / PGSIZE;
+    num_virt_pages = MAX_MEMSIZE / PGSIZE;
+    
+    phys_bitmap = calloc(num_phys_pages / 8, 1);
     virt_bitmap = calloc(num_virt_pages / 8, 1);
 
     int num_entries = 1 << 10; // 1024
@@ -119,6 +150,9 @@ void print_TLB_missrate(void)
 {
     double miss_rate = 0.0;
     // TODO: Calculate miss rate as (tlb_misses / tlb_lookups).
+    if (tlb_lookups > 0) {
+        miss_rate = (double)tlb_misses / (double)tlb_lookups;
+    }
     fprintf(stderr, "TLB miss rate %lf \n", miss_rate);
 }
 
@@ -144,8 +178,14 @@ pte_t *translate(pde_t *pgdir, void *va)
     // Return the corresponding PTE if found.
 
     vaddr32_t va_u = VA2U(va);
+    tlb_lookups++;
 
-    // TODO: implement TLB lookup
+    pte_t *tlb_pte = TLB_check(va);
+    if (tlb_pte != NULL) {
+        return tlb_pte;
+    }
+
+    tlb_misses++;
 
     uint32_t pd_index = PDX(va_u);
     uint32_t pt_index = PTX(va_u);
@@ -158,14 +198,25 @@ pte_t *translate(pde_t *pgdir, void *va)
 
     pte_t * page_table = (pte_t *)(uintptr_t)pde;
     pte_t pte = page_table[pt_index];
+    
     if (pte != 0) {
-        //TODO: implement TLB update
-        return pte;
+        TLB_add(va, (void *)(uintptr_t)pte);
+        return &page_table[pt_index];
     }
 
     return NULL; // Translation unsuccessful placeholder.
 }
 
+
+void * allocate_phys_page() {
+    for (uint32_t i = 0; i < num_phys_pages; i++) {
+        if (get_bit(phys_bitmap, i) == 0) {
+            set_bit(phys_bitmap, i);
+            return phys_mem + (i * PGSIZE);
+        }
+    }
+    return NULL; // No free page found
+}
 /*
  * map_page()
  * -----------
@@ -179,7 +230,44 @@ pte_t *translate(pde_t *pgdir, void *va)
 int map_page(pde_t *pgdir, void *va, void *pa)
 {
     // TODO: Map virtual address to physical address in the page tables.
-    return -1; // Failure placeholder.
+    vaddr32_t va_u = VA2U(va);
+    paddr32_t pa_u = (paddr32_t)(uintptr_t)pa;
+
+    uint32_t pd_index = PDX(va_u);
+    uint32_t pt_index = PTX(va_u);
+    uint32_t offset = OFF(va_u);
+
+    pde_t pde = pgdir[pd_index];
+
+    if (pde == 0) { // page table doesnt exist
+        void* new_table = allocate_phys_page();
+
+        if (new_table == NULL) { 
+            // no free pages left
+            return -1;
+        }
+
+        memset(new_table, 0, PGSIZE);
+        
+        pgdir[pd_index] = (pde_t)(uintptr_t)new_table;
+
+        pde = pgdir[pd_index];
+    }
+
+    
+    pte_t * page_table = (pte_t *)(uintptr_t)pde; // physical address -> ptr
+    uint32_t pfn = pa_u >> PFN_SHIFT;
+    page_table[pt_index] = (pfn << PFN_SHIFT);
+    uint32_t vpn = va_u >> PFN_SHIFT;
+
+    // update bitmaps
+    set_bit(phys_bitmap, pfn);
+    set_bit(virt_bitmap, vpn); 
+
+    // add to TLB
+    TLB_add(va, pa);
+
+    return 0; 
 }
 
 // -----------------------------------------------------------------------------
