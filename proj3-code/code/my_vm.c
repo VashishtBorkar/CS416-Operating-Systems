@@ -287,6 +287,32 @@ int map_page(pde_t *pgdir, void *va, void *pa)
 void *get_next_avail(int num_pages)
 {
     // TODO: Implement virtual bitmap search for free pages.
+    
+    pthread_mutex_lock(&vm_lock);
+    uint32_t free_pages = 0;
+    for (uint32_t vpn = 0; vpn < num_virt_pages; vpn++) {
+        if (get_bit(virt_bitmap, vpn) == 1) {
+            free_pages = 0;
+        } else {
+            free_pages++;
+        }
+
+
+        if (free_pages >= num_pages) {
+            // Found consecutive free pages
+            uint32_t start_vpn = vpn - num_pages + 1;
+
+            for (uint32_t i = 0; i<num_pages; i++) {
+                set_bit(virt_bitmap, start_vpn + i);
+            }
+            pthread_mutex_unlock(&vm_lock);
+            vaddr32_t base_va = (vaddr32_t)(start_vpn << PFN_SHIFT);
+            return U2VA(base_va);
+        }
+
+    }
+    
+    pthread_mutex_unlock(&vm_lock);
     return NULL; // No available block placeholder.
 }
 
