@@ -329,7 +329,44 @@ void *get_next_avail(int num_pages)
 void *n_malloc(unsigned int num_bytes)
 {
     // TODO: Determine required pages, allocate them, and map them.
-    return NULL; // Allocation failure placeholder.
+
+    if (num_bytes == 0) {
+        return NULL;
+    }
+
+    if (phys_mem == NULL) {
+        set_physical_mem();
+    }
+    int num_pages = (num_bytes + PGSIZE - 1) / PGSIZE; // ceiling division
+    if (num_pages <= 0){
+        return NULL;
+    }
+
+    void *base_va = get_next_avail(num_pages);
+    if (base_va == NULL) {
+        return NULL; // No available virtual pages
+    }
+    for(int i = 0; i < num_pages; i++){
+        void *curr_va = (char*)base_va + i * PGSIZE;
+
+        pthread_mutex_lock(&vm_lock);
+
+        void *curr_pa = allocate_phys_page();
+
+        if (curr_pa == NULL) {
+            pthread_mutex_unlock(&vm_lock);
+            // Free previously allocated pages
+            return NULL; // No available physical pages
+        }
+
+        if (map_page(page_dir, curr_va, curr_pa) != 0) {
+            pthread_mutex_unlock(&vm_lock);
+            // Free previously allocated pages
+            return NULL; // Mapping failure
+        }
+        pthread_mutex_unlock(&vm_lock);
+    }
+    return base_va; // Allocation failure placeholder.
 }
 
 /*
