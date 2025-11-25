@@ -18,6 +18,7 @@ char *phys_bitmap = NULL;
 char *virt_bitmap = NULL;
 
 pthread_mutex_t vm_lock = PTHREAD_MUTEX_INITIALIZER;
+pthread_mutex_t tlb_lock = PTHREAD_MUTEX_INITIALIZER;
 
 
 struct tlb tlb_store; // Placeholder for your TLB structure
@@ -137,6 +138,20 @@ pte_t *TLB_check(void *va)
 {
     // TODO: Implement TLB lookup.
     return NULL; // Currently returns TLB miss.
+}
+
+void TLB_invalidate(void *va)
+{
+    uint32_t va_u = VA2U(va);
+    uint32_t vpn = va_u >> PFN_SHIFT;
+    uint32_t idx = vpn % TLB_ENTRIES;
+
+    // tlb lock assumed to exist
+    pthread_mutex_lock(&tlb_lock);
+    if (tlb_store.entries[idx].valid && tlb_store.entries[idx].vpn == vpn) {
+        tlb_store.entries[idx].valid = false;
+    }
+    pthread_mutex_unlock(&tlb_lock);
 }
 
 /*
@@ -337,6 +352,7 @@ void *n_malloc(unsigned int num_bytes)
     if (phys_mem == NULL) {
         set_physical_mem();
     }
+    
     int num_pages = (num_bytes + PGSIZE - 1) / PGSIZE; // ceiling division
     if (num_pages <= 0){
         return NULL;
@@ -346,27 +362,37 @@ void *n_malloc(unsigned int num_bytes)
     if (base_va == NULL) {
         return NULL; // No available virtual pages
     }
-    for(int i = 0; i < num_pages; i++){
-        void *curr_va = (char*)base_va + i * PGSIZE;
 
-        pthread_mutex_lock(&vm_lock);
+    for(int i = 0; i < num_pages; i++){
+        vaddr32_t curr_va = (vaddr32_t)base_va + i * PGSIZE;
 
         void *curr_pa = allocate_phys_page();
 
         if (curr_pa == NULL) {
             pthread_mutex_unlock(&vm_lock);
             // Free previously allocated pages
+            n_free(base_va, i * PGSIZE);
             return NULL; // No available physical pages
         }
 
-        if (map_page(page_dir, curr_va, curr_pa) != 0) {
+        if (map_page(page_dir, (void*)curr_va, curr_pa) != 0) {
             pthread_mutex_unlock(&vm_lock);
             // Free previously allocated pages
+            n_free(base_va, i * PGSIZE);
             return NULL; // Mapping failure
         }
-        pthread_mutex_unlock(&vm_lock);
     }
     return base_va; // Allocation failure placeholder.
+}
+
+int page_table_empty(pte_t *page_table) {
+    const uint32_t entries = (PXMASK + 1); // 1024 for a 10-bit PTX
+    for (uint32_t i = 0; i < entries; ++i) {
+        if (page_table[i] != 0) {
+            return 0;
+        }
+    }
+    return 1;
 }
 
 /*
@@ -382,6 +408,47 @@ void n_free(void *va, int size)
 {
     // TODO: Clear page table entries, update bitmaps, and invalidate TLB.
     
+    int num_pages = (size + PGSIZE - 1) / PGSIZE; // round up
+    vaddr32_t start_va = VA2U(va);
+
+    pthread_mutex_lock(&vm_lock);
+    for (int i = 0; i < num_pages; i++) {
+        vaddr32_t va_u = start_va + (i * PGSIZE);
+        
+        uint32_t pd_index = PDX(va_u);
+        uint32_t pt_index = PTX(va_u);
+
+        pde_t pde = page_dir[pd_index];
+        if (pde == 0) {
+            continue; // Page table doesn't exist
+        }
+
+        pte_t *page_table = (pte_t *)(uintptr_t)pde;
+        pte_t *pte = &page_table[pt_index];
+        
+        if (pte == 0) {
+            continue; // Page not mapped
+        }
+
+        uint32_t pfn = *pte >> PFN_SHIFT;
+        uint32_t vpn = va_u >> PFN_SHIFT;
+        
+        *pte = 0;
+        
+        clear_bit(phys_bitmap, pfn);
+        clear_bit(virt_bitmap, vpn);
+
+        TLB_invalidate(U2VA(va_u));
+
+        if (page_table_empty(page_table)) {
+            page_dir[pd_index] = 0;
+            uint32_t pt_pfn = ((uint32_t)pde) >> PFN_SHIFT;
+            clear_bit(phys_bitmap, pt_pfn);
+            memset(page_table, 0, PGSIZE);
+        }
+    }
+
+    pthread_mutex_unlock(&vm_lock);
 
 
 }
