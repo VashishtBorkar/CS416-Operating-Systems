@@ -471,11 +471,36 @@ int put_data(void *va, void *val, int size)
 {
     // TODO: Walk virtual pages, translate to physical addresses,
     // and copy data into simulated memory.
+    if (va == NULL || val == NULL || size <= 0) {
+        return -1; // Invalid input
+    }
+    int bytes_remaining = size;
+    vaddr32_t curr_va = VA2U(va);
+    char *src = (char *)val;
     
+    while(bytes_remaining > 0){
+        //Translate current virtual to physical address
+        void *curr_va_ptr = U2VA(curr_va);
+        pte_t *pte = translate(page_dir, curr_va_ptr);
+        if (pte == NULL) {
+            return -1; // Translation failure
+        }
+        paddr32_t page_base = *pte;
+        uint32_t offset = OFF(curr_va);
 
+        // Checking how much we can write to the current page
+        uint32_t space_in_page = PGSIZE - offset;
 
+        uint32_t bytes_to_copy = (bytes_remaining < space_in_page) ? bytes_remaining : space_in_page;
+        
+        char *phys_addr = phys_mem + page_base + offset;
+        memcpy(phys_addr, src, bytes_to_copy);
 
-    return -1; // Failure placeholder.
+        src += bytes_to_copy;
+        curr_va += bytes_to_copy;
+        bytes_left -= bytes_to_copy;
+    }
+    return 0;
 }
 
 /*
@@ -488,8 +513,34 @@ int put_data(void *va, void *val, int size)
  */
 void get_data(void *va, void *val, int size)
 {
-    // TODO: Perform reverse operation of put_data().
-    //
+        // TODO: Perform reverse operation of put_data().
+    if (va == NULL || val == NULL || size <= 0) {
+        return -1; // Invalid input
+    }
+    int bytes_remaining = size;
+    char *dst = (char *)val;
+    vaddr32_t curr_va = VA2U(va);
+
+    while (bytes_remaining > 0){
+        void *curr_va_ptr = U2VA(curr_va)
+        pte_t *pte = translate(page_dir, curr_va_ptr);
+
+        if (pte == NULL) {
+            return;
+        }
+        paddr32_t page_base = *pte;
+        uint32_t offset = OFF(curr_va);
+        uint32_t space_in_page = PGSIZE - offset;
+        uint32_t bytes_to_copy = (bytes_remaining < space_in_page) ? bytes_remaining : space_in_page;
+
+        char *phys_addr = phys_mem + page_base + offset;
+        memcpy(src, phys_addr, bytes_to_copy);
+
+        dst += bytes_to_copy;
+        curr_va += bytes_to_copy;
+        bytes_remaining -= bytes_to_copy;
+    }
+
 }
 
 // -----------------------------------------------------------------------------
