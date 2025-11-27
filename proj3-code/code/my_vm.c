@@ -513,7 +513,7 @@ int put_data(void *va, void *val, int size)
  */
 void get_data(void *va, void *val, int size)
 {
-        // TODO: Perform reverse operation of put_data().
+    // TODO: Perform reverse operation of put_data().
     if (va == NULL || val == NULL || size <= 0) {
         return -1; // Invalid input
     }
@@ -560,18 +560,29 @@ void mat_mult(void *mat1, void *mat2, int size, void *answer)
     int i, j, k;
     uint32_t a, b, c;
 
+
+    vaddress32_t mat1_base = VA2U(mat1);
+    vaddress32_t mat2_base = VA2U(mat2);
+    vaddress32_t answer_base = VA2U(answer);
+
     for (i = 0; i < size; i++) {
         for (j = 0; j < size; j++) {
             c = 0;
             for (k = 0; k < size; k++) {
                 // TODO: Compute addresses for mat1[i][k] and mat2[k][j].
+                vaddr32_t mat1_addr = mat1_base + (i * size + k) * sizeof(int);
+                vaddr32_t mat2_addr = mat2_base + (k * size + j) * sizeof(int);
+
+
                 // Retrieve values using get_data() and perform multiplication.
                 get_data(NULL, &a, sizeof(int));  // placeholder
                 get_data(NULL, &b, sizeof(int));  // placeholder
+
                 c += (a * b);
             }
             // TODO: Store the result in answer[i][j] using put_data().
-            put_data(NULL, (void *)&c, sizeof(int)); // placeholder
+            vaddr32_t answer_addr = answer_base + (i * size + j) * sizeof(int);
+            put_data(U2VA(answer_addr), (void *)&c, sizeof(int)); // placeholder
         }
     }
 }
