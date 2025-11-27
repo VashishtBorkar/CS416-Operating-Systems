@@ -577,9 +577,9 @@ void mat_mult(void *mat1, void *mat2, int size, void *answer)
     uint32_t a, b, c;
 
 
-    vaddress32_t mat1_base = VA2U(mat1);
-    vaddress32_t mat2_base = VA2U(mat2);
-    vaddress32_t answer_base = VA2U(answer);
+    vaddr32_t mat1_base = VA2U(mat1);
+    vaddr32_t mat2_base = VA2U(mat2);
+    vaddr32_t answer_base = VA2U(answer);
 
     for (i = 0; i < size; i++) {
         for (j = 0; j < size; j++) {
