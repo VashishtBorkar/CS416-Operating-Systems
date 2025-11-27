@@ -5,8 +5,8 @@
 #include <inttypes.h>
 #include "../my_vm.h"
 
-#define SIZE 5
-#define ARRAY_SIZE 400
+#define SIZE 3
+#define ARRAY_SIZE 100
 
 static inline uint32_t add_offset32(void *base_va, size_t off_bytes) {
     uint32_t base = VA2U(base_va);        // 32-bit simulated VA

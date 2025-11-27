@@ -70,6 +70,7 @@ typedef uint32_t pde_t;       // Page directory entry
 
 static inline vaddr32_t VA2U(void *va)     { return (vaddr32_t)(uintptr_t)va; }
 static inline void*     U2VA(vaddr32_t u)  { return (void*)(uintptr_t)u; }
+#define INVALID_PA  ((paddr32_t)-1)
 
 // -----------------------------------------------------------------------------
 //  TLB Configuration
@@ -80,6 +81,7 @@ static inline void*     U2VA(vaddr32_t u)  { return (void*)(uintptr_t)u; }
 struct tlb_entry {
     uint32_t vpn;    // virtual page number
     uint32_t pfn;    // physical frame number
+    pte_t pte;
     bool valid;      // is this entry valid?
 };
 
@@ -98,6 +100,8 @@ struct tlb {
      *   bool valid;
      *   uint64_t last_used;
      */
+    int count;
+    int next_evict;
 
      struct tlb_entry entries[TLB_ENTRIES];
 };
