@@ -103,7 +103,7 @@ void set_physical_mem(void) {
     // TODO: Implement memory allocation for simulated physical memory.
     // Use 32-bit values for sizes, page counts, and offsets.
     pthread_mutex_lock(&vm_lock);
-    DEBUG_PRINT("[SETUP] MEMSIZE=%u bytes, PGSIZE=%u bytes\n", MEMSIZE, PGSIZE);
+    //DEBUG_PRINT("[SETUP] MEMSIZE=%u bytes, PGSIZE=%u bytes\n", MEMSIZE, PGSIZE);
 
     if (phys_mem != NULL) {
         pthread_mutex_unlock(&vm_lock);
@@ -120,9 +120,8 @@ void set_physical_mem(void) {
     // calculate number of pages
     num_phys_pages = MEMSIZE / PGSIZE;
     num_virt_pages = MAX_MEMSIZE / PGSIZE;
-    DEBUG_PRINT("[SETUP] num_phys_pages=%d, num_virt_pages=%d\n", num_phys_pages, num_virt_pages);
-    DEBUG_PRINT("[SETUP] phys_bitmap size=%zu bytes, virt_bitmap size=%zu bytes\n",
-           (num_phys_pages + 7) / 8, (num_virt_pages + 7) / 8);
+    // DEBUG_PRINT("[SETUP] num_phys_pages=%d, num_virt_pages=%d\n", num_phys_pages, num_virt_pages);
+    // DEBUG_PRINT("[SETUP] phys_bitmap size=%zu bytes, virt_bitmap size=%zu bytes\n", (num_phys_pages + 7) / 8, (num_virt_pages + 7) / 8);
     
     // allocate bitmaps
     phys_bitmap = calloc((num_phys_pages + 7) / 8, 1);
@@ -134,14 +133,14 @@ void set_physical_mem(void) {
         fprintf(stderr, "Error allocating page directory physical page\n");
         exit(1);
     }
-    DEBUG_PRINT("[SETUP] Page directory physical addr = 0x%08X\n", page_dir_pa);
+    // DEBUG_PRINT("[SETUP] Page directory physical addr = 0x%08X\n", page_dir_pa);
 
     // Convert physical address to C pointer
     page_dir = (pde_t *)(phys_mem + page_dir_pa);
     memset(page_dir, 0, PGSIZE); // zero out page directory
 
     // initialize TLB entries
-    DEBUG_PRINT("[SETUP] Initialized TLB with %d entries\n" , TLB_ENTRIES);
+    // DEBUG_PRINT("[SETUP] Initialized TLB with %d entries\n" , TLB_ENTRIES);
     for (int i = 0; i < TLB_ENTRIES; i++) {
         tlb_store.entries[i].valid = false;
     }
@@ -255,7 +254,7 @@ void TLB_invalidate(void *va) {
     for (int i = 0; i < TLB_ENTRIES; i++) {
         if (tlb_store.entries[i].valid && tlb_store.entries[i].vpn == vpn) {
             tlb_store.entries[i].valid = false;
-            DEBUG_PRINT("[TLB_INVALIDATE] VPN=%u (slot=%d)\n", vpn, i);
+            // DEBUG_PRINT("[TLB_INVALIDATE] VPN=%u (slot=%d)\n", vpn, i);
             break;  // Found and invalidated
         }
     }
@@ -274,7 +273,7 @@ void print_TLB_missrate(void)
 {
     double miss_rate = 0.0;
     // TODO: Calculate miss rate as (tlb_misses / tlb_lookups).
-    printf("TLB MISSES: %d\nTLB HITS: %d\n", tlb_misses, tlb_lookups);
+    // printf("TLB MISSES: %d\nTLB HITS: %d\n", tlb_misses, tlb_lookups);
     
     if (tlb_lookups > 0) {
         miss_rate = (double)tlb_misses / (double)tlb_lookups;
@@ -380,9 +379,8 @@ int map_page(pde_t *pgdir, void *va, void *pa)
 
         pgdir[pd_index] = new_table_pa;
         pde = new_table_pa;
-        DEBUG_PRINT("[MAP_PAGE] Directory[%u] <- 0x%08X\n", pd_index, pgdir[pd_index]);
-        DEBUG_PRINT("[MAP_PAGE] Created new PT at PA=0x%08X  for PD=%u\n",
-                    new_table_pa, pd_index);
+        // DEBUG_PRINT("[MAP_PAGE] Directory[%u] <- 0x%08X\n", pd_index, pgdir[pd_index]);
+        // DEBUG_PRINT("[MAP_PAGE] Created new PT at PA=0x%08X  for PD=%u\n", new_table_pa, pd_index);
     }
 
     // Set page table
@@ -398,10 +396,9 @@ int map_page(pde_t *pgdir, void *va, void *pa)
     set_bit(virt_bitmap, vpn); 
 
     // add to TLB
-    TLB_add(va, pa);
+    // TLB_add(va, pa);
 
-    DEBUG_PRINT("[MAP_PAGE] VA=0x%08X -> PA=0x%08X  PD=%u PT=%u\n",
-                va_u, pa_u, pd_index, pt_index);
+    // DEBUG_PRINT("[MAP_PAGE] VA=0x%08X -> PA=0x%08X  PD=%u PT=%u\n", va_u, pa_u, pd_index, pt_index);
 
     return 0; 
 }
@@ -423,7 +420,7 @@ int map_page(pde_t *pgdir, void *va, void *pa)
 void *get_next_avail(int num_pages)
 {
     // TODO: Implement virtual bitmap search for free pages.
-    DEBUG_PRINT("[GET_NEXT_AVAIL] Request %d pages\n", num_pages);
+    // DEBUG_PRINT("[GET_NEXT_AVAIL] Request %d pages\n", num_pages);
     
     uint32_t free_pages = 0;
     for (uint32_t vpn = 1; vpn < num_virt_pages; vpn++) {
@@ -441,8 +438,7 @@ void *get_next_avail(int num_pages)
                 set_bit(virt_bitmap, start_vpn + i);
             }
             vaddr32_t base_va = (vaddr32_t)(start_vpn << PFN_SHIFT);
-            DEBUG_PRINT("[GET_NEXT_AVAIL] Found %d contiguous pages starting at VPN=%u (VA=0x%08X)\n",
-                num_pages, start_vpn, base_va);
+            //DEBUG_PRINT("[GET_NEXT_AVAIL] Found %d contiguous pages starting at VPN=%u (VA=0x%08X)\n", num_pages, start_vpn, base_va);
             return U2VA(base_va);
         }
 
@@ -507,8 +503,7 @@ void *n_malloc(unsigned int num_bytes)
     }
 
     pthread_mutex_unlock(&vm_lock);
-    DEBUG_PRINT("[N_MALLOC] Allocated %u bytes (%d pages) at VA=0x%08X\n",
-                num_bytes, num_pages, VA2U(base_va));
+    // DEBUG_PRINT("[N_MALLOC] Allocated %u bytes (%d pages) at VA=0x%08X\n", num_bytes, num_pages, VA2U(base_va));
     return base_va;
 }
 
@@ -574,7 +569,7 @@ void n_free(void *va, int size)
         }
     }
 
-    DEBUG_PRINT("[N_FREE] Freed VA=0x%08X)\n", start_va);
+    // DEBUG_PRINT("[N_FREE] Freed VA=0x%08X)\n", start_va);
     pthread_mutex_unlock(&vm_lock);
 
 }
@@ -621,8 +616,7 @@ int put_data(void *va, void *val, int size)
         
         char *phys_addr = phys_mem + page_base + offset;
         memcpy(phys_addr, src, bytes_to_copy);
-        DEBUG_PRINT("[PUT_DATA] VA=0x%08X -> PA=0x%08X  offset=%u  bytes=%u\n",
-            curr_va, page_base + offset, offset, bytes_to_copy);
+        // DEBUG_PRINT("[PUT_DATA] VA=0x%08X -> PA=0x%08X  offset=%u  bytes=%u\n", curr_va, page_base + offset, offset, bytes_to_copy);
 
         src += bytes_to_copy;
         curr_va += bytes_to_copy;
@@ -717,8 +711,7 @@ void mat_mult(void *mat1, void *mat2, int size, void *answer)
             vaddr32_t answer_addr = answer_base + (i * size + j) * sizeof(int);
             put_data(U2VA(answer_addr), (void *)&c, sizeof(int)); // placeholder
 
-            DEBUG_PRINT("[MAT_MULT] C[%d][%d] = %d\n", i, j, c);
+            // DEBUG_PRINT("[MAT_MULT] C[%d][%d] = %d\n", i, j, c);
         }
     }
 }
-
