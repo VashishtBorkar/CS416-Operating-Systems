@@ -81,6 +81,16 @@ paddr32_t allocate_phys_page() {
 }
 
 /*
+    Phys memory 1 GB
+    page directory: 1 page (4096 bytes) inside of phys mem has 1024 pdes
+    page dir entry (pde): 4 bytes, points to page table
+    page table: 1 page (4096 bytes) has 1024 ptes
+    page table entry: 4 bytes, points to data page that has actual data
+
+*/
+
+
+/*
  * set_physical_mem()
  * ------------------
  * Allocates and initializes simulated physical memory and any required
@@ -158,11 +168,17 @@ void set_physical_mem(void) {
  */
 int TLB_add(void *va, void *pa) 
 {
-    if (!va || !pa)
+    if (va == NULL) {
         return -1;
+    }
 
     uint32_t va_u = VA2U(va);
     uint32_t pa_u = VA2U(pa);
+
+    if (pa_u == INVALID_PA) {
+        return -1;
+    }
+    
     uint32_t vpn = va_u >> PFN_SHIFT;
     uint32_t pfn = pa_u >> PFN_SHIFT;
 
@@ -207,8 +223,11 @@ int TLB_add(void *va, void *pa)
  */
 pte_t *TLB_check(void *va)
 {
-    if (!va) return INVALID_PA;
     uint32_t va_u = VA2U(va);
+    if (va_u == INVALID_PA) {
+        return NULL;
+    }
+
     uint32_t vpn = va_u >> PFN_SHIFT;
     
     pthread_mutex_lock(&tlb_lock);
@@ -223,9 +242,11 @@ pte_t *TLB_check(void *va)
 }
 
 void TLB_invalidate(void *va) {
-    if (!va) return;
-    
+
     uint32_t va_u = VA2U(va);
+    if (va_u == INVALID_PA){
+        return;
+    }
     uint32_t vpn = va_u >> PFN_SHIFT;
 
     pthread_mutex_lock(&tlb_lock);
@@ -253,6 +274,8 @@ void print_TLB_missrate(void)
 {
     double miss_rate = 0.0;
     // TODO: Calculate miss rate as (tlb_misses / tlb_lookups).
+    printf("TLB MISSES: %d\nTLB HITS: %d\n", tlb_misses, tlb_lookups);
+    
     if (tlb_lookups > 0) {
         miss_rate = (double)tlb_misses / (double)tlb_lookups;
     }
@@ -297,10 +320,10 @@ pte_t *translate(pde_t *pgdir, void *va)
     pde_t pde = pgdir[pd_index];
     //DEBUG_PRINT("[TRANSLATE] Checking PDE[%u] = 0x%08X\n", pd_index, pde);
 
-    if (pde == INVALID_PA) {
+    if (pde == 0) {
         // unmapped
         // DEBUG_PRINT("[TRANSLATE] No page directory for PD=%u\n", pd_index);
-        return INVALID_PA;
+        return NULL;
     }
     
     // Check page table
@@ -310,7 +333,7 @@ pte_t *translate(pde_t *pgdir, void *va)
 
     //DEBUG_PRINT("[TRANSLATE] TLB MISS VA=0x%08X  PD=%u PT=%u\n",va_u, pd_index, pt_index);
     
-    if (pte == INVALID_PA) {
+    if (pte == 0) {
         // unmapped
         // DEBUG_PRINT("[TRANSLATE] No PTE mapping for PT=%u\n", pt_index);
         return NULL;
@@ -343,7 +366,7 @@ int map_page(pde_t *pgdir, void *va, void *pa)
     uint32_t pd_index = PDX(va_u);
     pde_t pde = pgdir[pd_index];
 
-    if (pde == INVALID_PA) { // page table doesnt exist
+    if (pde == 0) { // page table doesnt exist
         paddr32_t new_table_pa = allocate_phys_page();
 
         if (new_table_pa == INVALID_PA) { 
@@ -403,7 +426,7 @@ void *get_next_avail(int num_pages)
     DEBUG_PRINT("[GET_NEXT_AVAIL] Request %d pages\n", num_pages);
     
     uint32_t free_pages = 0;
-    for (uint32_t vpn = 0; vpn < num_virt_pages; vpn++) {
+    for (uint32_t vpn = 1; vpn < num_virt_pages; vpn++) {
         // Check for sequential bits
         if (get_bit(virt_bitmap, vpn) == 1) {
             free_pages = 0;
@@ -458,7 +481,7 @@ void *n_malloc(unsigned int num_bytes)
     pthread_mutex_lock(&vm_lock);
 
     void *base_va = get_next_avail(num_pages);
-    if (base_va == INVALID_PA) {
+    if (base_va == NULL) {
         pthread_mutex_unlock(&vm_lock);
         return NULL; // No available virtual pages
     }
@@ -521,22 +544,22 @@ void n_free(void *va, int size)
         
         uint32_t pd_index = PDX(va_u);
         pde_t pde = page_dir[pd_index];
-        if (pde == INVALID_PA) {
+        if (pde == 0) {
             continue; // Page table doesn't exist
         }
 
         pte_t *page_table = (pte_t *)(phys_mem + pde);
         uint32_t pt_index = PTX(va_u);
-        pte_t *pte = &page_table[pt_index];
+        pte_t pte = page_table[pt_index];
         
-        if (*pte == INVALID_PA) {
+        if (pte == 0) {
             continue; // Page not mapped
         }
 
-        uint32_t pfn = *pte >> PFN_SHIFT;
+        uint32_t pfn = pte >> PFN_SHIFT;
         uint32_t vpn = va_u >> PFN_SHIFT;
         
-        *pte = 0;
+        page_table[pt_index] = 0;
         
         clear_bit(phys_bitmap, pfn);
         clear_bit(virt_bitmap, vpn);
@@ -585,7 +608,7 @@ int put_data(void *va, void *val, int size)
         //Translate current virtual to physical address
         void *curr_va_ptr = U2VA(curr_va);
         pte_t *pte = translate(page_dir, curr_va_ptr);
-        if (pte == INVALID_PA) {
+        if (pte == NULL) {
             return -1; // Translation failure
         }
         paddr32_t page_base = *pte;
@@ -630,7 +653,7 @@ void get_data(void *va, void *val, int size)
         void *curr_va_ptr = U2VA(curr_va);
         pte_t *pte = translate(page_dir, curr_va_ptr);
 
-        if (pte == INVALID_PA) {
+        if (pte == NULL) {
             return;
         }
         paddr32_t page_base = *pte;
