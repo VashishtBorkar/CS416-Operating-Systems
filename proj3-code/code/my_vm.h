@@ -30,19 +30,46 @@
 // -----------------------------------------------------------------------------
 
 #define VA_BITS        32u           // Simulated virtual address width
-#define PGSIZE         4096u         // Page size = 4 KB
 
 #define MAX_MEMSIZE    (1ULL << 32)  // Max virtual memory = 4 GB
 #define MEMSIZE        (1ULL << 30)  // Simulated physical memory = 1 GB
 
+#define PGSIZE         4096u         // Page size = 4 KB
 
 //COMPLETE HERE
-
-// --- Constants for bit shifts and masks ---
-#define PDXSHIFT      22    /** TODO: number of bits to shift for directory index **/
-#define PTXSHIFT      12    /** TODO: number of bits to shift for table index **/
-#define PXMASK        0x3FF /** TODO: mask for getting pd bits **/
-#define OFFMASK       0xFFF /** TODO: mask for getting offset bits **/
+#if PGSIZE == 4096u
+    #define PDXSHIFT      22
+    #define PTXSHIFT      12
+    #define PXMASK        0x3FF
+    #define OFFMASK       0xFFF
+    
+#elif PGSIZE == 8192u
+    #define PDXSHIFT      23
+    #define PTXSHIFT      13
+    #define PXMASK        0x3FF
+    #define OFFMASK       0x1FFF
+    
+#elif PGSIZE == 16384u
+    #define PDXSHIFT      25
+    #define PTXSHIFT      14
+    #define PXMASK        0x7FF
+    #define OFFMASK       0x3FFF
+    
+#elif PGSIZE == 32768u
+    #define PDXSHIFT      27
+    #define PTXSHIFT      15
+    #define PXMASK        0xFFF
+    #define OFFMASK       0x7FFF
+    
+#elif PGSIZE == 65536u
+    #define PDXSHIFT      29
+    #define PTXSHIFT      16
+    #define PXMASK        0x1FFF
+    #define OFFMASK       0xFFFF
+    
+#else
+    #error "Invalid PGSIZE. Only support 4KB, 8KB, 16KB, 32KB, or 64KB"
+#endif
 
 // --- Macros to extract address components ---
 #define PDX(va)       (((uint32_t)(va) >> PDXSHIFT) & PXMASK)   /** TODO: compute directory index from virtual address **/
