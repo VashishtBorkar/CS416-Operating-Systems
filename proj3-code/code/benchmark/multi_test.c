@@ -138,7 +138,7 @@ int main() {
             }
         }
     }
-
+    // print_TLB_missrate();
     // free in threads
     printf("Freeing everything in multiple threads\n");
     for (int i = 0; i < num_threads; i++)

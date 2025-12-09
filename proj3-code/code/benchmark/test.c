@@ -5,7 +5,7 @@
 #include <inttypes.h>
 #include "../my_vm.h"
 
-#define SIZE 3
+#define SIZE 5
 #define ARRAY_SIZE 100
 
 static inline uint32_t add_offset32(void *base_va, size_t off_bytes) {
@@ -64,6 +64,8 @@ int main(void) {
         }
         printf("\n");
     }
+
+    // print_TLB_missrate();
 
     printf("Freeing the allocations!\n");
     n_free(a, ARRAY_SIZE);
