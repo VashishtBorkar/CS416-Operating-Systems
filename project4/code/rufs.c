@@ -25,6 +25,7 @@
 char diskfile_path[PATH_MAX];
 
 // Declare your in-memory data structures here
+struct superblock sb;
 
 /* 
  * Get available inode number from bitmap
@@ -37,6 +38,20 @@ int get_avail_ino() {
 
 	// Step 3: Update inode bitmap and write to disk 
 
+	char buffer[BLOCK_SIZE];
+	if (bio_read(sb.i_bitmap_blk, buffer) < 0) {
+		return -1;
+	}
+
+	bitmap_t b = (bitmap_t)buffer;
+
+	for (int i = 0; i < MAX_INUM; i++) {
+		if (get_bitmap(b, i) == 0) {
+			set_bitmap(b, i);
+			bio_write(sb.i_bitmap_blk, buffer);
+			return i;
+		}
+	}
 	return 0;
 }
 
@@ -130,16 +145,71 @@ int get_node_by_path(const char *path, uint16_t ino, struct inode *inode) {
 int rufs_mkfs() {
 
 	// Call dev_init() to initialize (Create) Diskfile
+	dev_init(diskfile_path);
 
 	// write superblock information
+	struct superblock new_sb;
+	memset(&new_sb, 0, sizeof(struct superblock));
+	new_sb.magic_num = MAGIC_NUM;
+	new_sb.max_inum = MAX_INUM;
+	new_sb.max_dnum = MAX_DNUM;
 
-	// initialize inode bitmap
+	int inodes_per_block = BLOCK_SIZE / sizeof(struct inode);
+	int inode_blocks = (MAX_INUM + inodes_per_block - 1) / inodes_per_block;
 
-	// initialize data block bitmap
+	new_sb.i_bitmap_blk = 1;
+	new_sb.d_bitmap_blk = 2;
+	new_sb.i_start_blk = 3;
+	new_sb.d_start_blk = new_sb.i_start_blk + inode_blocks;
 
-	// update bitmap information for root directory
+	char blockbuffer[BLOCK_SIZE];
+	memset(blockbuffer, 0, BLOCK_SIZE);
+	memcpy(blockbuffer, &new_sb, sizeof(struct superblock));
+	if(bio_write(0, blockbuffer) < 0) {
+		return -1;
+	}
 
+	// initialize inode bitmap and set bitmap
+	memset(blockbuffer, 0, BLOCK_SIZE);
+	bitmap_t i_bitmap = (bitmap_t)blockbuffer;
+	set_bitmap(i_bitmap, 0); 
+	bio_write(new_sb.i_bitmap_blk, blockbuffer);
+	
+	// initialize data block bitmap and set bitmap
+	memset(blockbuffer, 0, BLOCK_SIZE);
+	bitmap_t d_bitmap = (bitmap_t)blockbuffer;
+	set_bitmap(d_bitmap, 0);
+	bio_write(new_sb.d_bitmap_blk, blockbuffer);
+
+	// initialize root directory data block
+	memset(blockbuffer, 0, BLOCK_SIZE);
+	bio_write(new_sb.d_start_blk, blockbuffer);
+
+	sb = new_sb;
+	
 	// update inode for root directory
+	struct inode root;
+	memset(&root, 0, sizeof(struct inode));
+
+	root.ino = 0;
+	root.valid = 1;
+	root.type = __S_IFDIR;
+	root.size = 0;
+	root.link = 2;
+	for (int i = 0; i < 16; i++) root.direct_ptr[i] = 0;
+	for (int i = 0; i < 8; i++) root.indirect_ptr[i] = 0;
+	root.direct_ptr[0] = new_sb.d_start_blk; 
+
+	time_t curr_time = time(NULL);
+	root.vstat.st_atime = curr_time;
+	root.vstat.st_mtime = curr_time;
+
+	root.vstat.st_mode = __S_IFDIR | 0755;
+	root.vstat.st_uid = getuid();
+	root.vstat.st_gid = getgid();
+	root.vstat.st_nlink = 2;
+
+	writei(0, &root);
 
 	return 0;
 }
@@ -149,12 +219,32 @@ int rufs_mkfs() {
  * FUSE file operations
  */
 static void *rufs_init(struct fuse_conn_info *conn) {
+	struct stat st;
 
 	// Step 1a: If disk file is not found, call mkfs
+	if (stat(diskfile_path, &st) < 0) {
+        if (rufs_mkfs() < 0) {
+            fprintf(stderr, "Failed to format filesystem\n");
+            return NULL;
+        }
+    } else {
+        // Step 1b: If disk file is found, just initialize in-memory data structures
+        if (dev_open(diskfile_path) < 0) {
+            fprintf(stderr, "Failed to open disk file\n");
+            return NULL;
+        }
+    }
 
-	// Step 1b: If disk file is found, just initialize in-memory data structures
 	// and read superblock from disk
+	char blockbuffer[BLOCK_SIZE];
+	if (bio_read(0, blockbuffer) < 0) {
+		fprintf(stderr, "Failed to read superblock\n");
+		return NULL;
+	}
 
+	// Copy superblock into global in-memory superblock
+    memcpy(&sb, blockbuffer, sizeof(struct superblock));
+	
 	return NULL;
 }
 
@@ -163,6 +253,7 @@ static void rufs_destroy(void *userdata) {
 	// Step 1: De-allocate in-memory data structures
 
 	// Step 2: Close diskfile
+	dev_close();
 
 }
 
@@ -172,7 +263,7 @@ static int rufs_getattr(const char *path, struct stat *stbuf) {
 
 	// Step 2: fill attribute of file into stbuf from inode
 
-	stbuf->st_mode   = S_IFDIR | 0755;
+	stbuf->st_mode   = __S_IFDIR | 0755;
 	stbuf->st_nlink  = 2;
 	time(&stbuf->st_mtime);
 
