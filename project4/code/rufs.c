@@ -269,6 +269,46 @@ int get_node_by_path(const char *path, uint16_t ino, struct inode *inode) {
 	// Step 1: Resolve the path name, walk through path, and finally, find its inode.
 	// Note: You could either implement it in a iterative way or recursive way
 
+	if (strcmp(path, "/") == 0) {
+        if (readi(ino, inode) < 0) {
+            return -1;
+        }
+        return 0;
+    }
+
+	struct inode cur;
+    if (readi(ino, &cur) < 0) {
+        return -1;
+    }
+
+	char path_copy[PATH_MAX];
+    strncpy(path_copy, path, PATH_MAX - 1);
+    path_copy[PATH_MAX - 1] = '\0';
+
+	char *p = path_copy;
+    if (*p == '/') {
+        p++;
+    }
+
+	char *token = strtok(p, "/");
+    struct dirent dent;
+
+	while (token != NULL) {
+        if (!S_ISDIR(cur.type)) {
+            return -1;
+        }
+        size_t name_len = strlen(token);
+        if (dir_find(cur.ino, token, name_len, &dent) < 0) {
+            return -1;
+        }
+        if (readi(dent.ino, &cur) < 0) {
+            return -1;
+        }
+        token = strtok(NULL, "/");
+    }
+	if (inode != NULL) {
+        *inode = cur;
+    }
 	return 0;
 }
 
