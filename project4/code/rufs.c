@@ -74,22 +74,53 @@ int get_avail_blkno() {
  */
 int readi(uint16_t ino, struct inode *inode) {
 
+	if (ino >= sb.max_inum) {
+        return -1;
+    }
+
 	// Step 1: Get the inode's on-disk block number
+	int inodes_per_block = BLOCK_SIZE / sizeof(struct inode);
+	int block_num = sb.i_start_blk + (ino / inodes_per_block);
 
 	// Step 2: Get offset of the inode in the inode on-disk block
+	int offset = (ino % inodes_per_block) * sizeof(struct inode);
 
 	// Step 3: Read the block from disk and then copy into inode structure
+	char blockbuffer[BLOCK_SIZE];
+	if (bio_read(block_num, blockbuffer) < 0) {
+		return -1;
+	}
+	memcpy(inode, blockbuffer + offset, sizeof(struct inode));
+
+	if (!inode->valid) {
+		return -1;
+	}
 
 	return 0;
 }
 
 int writei(uint16_t ino, struct inode *inode) {
-
+	if (ino >= sb.max_inum) {
+		return -1;
+	}
+	
 	// Step 1: Get the block number where this inode resides on disk
+	int inodes_per_block = BLOCK_SIZE / sizeof(struct inode);
+	int block_num = sb.i_start_blk + (ino / inodes_per_block);
 	
 	// Step 2: Get the offset in the block where this inode resides on disk
+	int offset = (ino % inodes_per_block) * sizeof(struct inode);
 
 	// Step 3: Write inode to disk 
+	char blockbuffer[BLOCK_SIZE];
+	if (bio_read(block_num, blockbuffer) < 0) {
+		return -1;
+	}
+	memcpy(blockbuffer + offset, inode, sizeof(struct inode));
+
+	if (bio_write(block_num, blockbuffer) < 0) {
+		return -1;
+	}
 
 	return 0;
 }
