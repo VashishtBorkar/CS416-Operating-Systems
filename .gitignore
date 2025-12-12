@@ -40,4 +40,9 @@ Thumbs.db
 
 # Backup files
 *.bak
+
+# executables 
 proj3-code/code/benchmark/mtest
+project4/code/rufs
+project4/code/benchmark/test_case
+project4/code/DISKFILE

@@ -9,7 +9,7 @@
 #include <dirent.h>
 
 /* You need to change this macro to your TFS mount point*/
-#define TESTDIR "/tmp/mountdir"
+#define TESTDIR "/tmp/vb471/mountdir"
 
 #define N_FILES 100
 #define BLOCKSIZE 4096
@@ -99,11 +99,11 @@ int main(int argc, char **argv) {
 	printf("TEST 5: Directory create success \n");
 
 
-	/* Close operation */	
-	if (close(fd) < 0) {
-		perror("close largefile");
-		exit(1);
-	}
+	// /* Close operation */	
+	// if (close(fd) < 0) {
+	// 	perror("close largefile");
+	// 	exit(1);
+	// }
 
 	printf("Benchmark completed \n");
 	return 0;
