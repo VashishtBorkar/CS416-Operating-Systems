@@ -53,7 +53,7 @@ int get_avail_ino() {
 			return i;
 		}
 	}
-	return 0;
+	return -1;
 }
 
 /* 
@@ -77,7 +77,7 @@ int get_avail_blkno() {
 			return sb.d_start_blk + i;
 		}
 	}
-	return 0;
+	return -1;
 }
 
 /* 
@@ -86,7 +86,7 @@ int get_avail_blkno() {
 int readi(uint16_t ino, struct inode *inode) {
 
 	if (ino >= sb.max_inum) {
-        return -1;
+        return -ENOENT;
     }
 
 	// Step 1: Get the inode's on-disk block number
@@ -104,7 +104,7 @@ int readi(uint16_t ino, struct inode *inode) {
 	memcpy(inode, blockbuffer + offset, sizeof(struct inode));
 
 	if (!inode->valid) {
-		return -1;
+		return -ENOENT;
 	}
 
 	return 0;
@@ -181,7 +181,7 @@ int dir_find(uint16_t ino, const char *fname, size_t name_len, struct dirent *di
 		}
 	}
 
-	return -1; // not found in any block
+	return -ENONET; // not found in any block
 }
 
 int dir_add(struct inode dir_inode, uint16_t f_ino, const char *fname, size_t name_len) {
